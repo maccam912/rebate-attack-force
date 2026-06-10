@@ -326,10 +326,15 @@ fn sanitize_code(s: &str) -> String {
 
 pub fn build_router(state: Arc<AppState>, dist_dir: &str) -> Router {
     let index = format!("{dist_dir}/index.html");
+    let files = ServeDir::new(dist_dir).fallback(ServeFile::new(index));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/ws", any(ws_handler))
-        .fallback_service(ServeDir::new(dist_dir).fallback(ServeFile::new(index)))
+        .fallback_service(
+            tower::ServiceBuilder::new()
+                .layer(tower_http::compression::CompressionLayer::new())
+                .service(files),
+        )
         .with_state(state)
 }
 

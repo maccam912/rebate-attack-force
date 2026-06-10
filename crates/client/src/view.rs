@@ -258,9 +258,18 @@ pub fn sync_world(
         (Without<FrogVis>, Without<CrateVis>),
     >,
     mut tags: ParamSet<(
-        Query<(&ChildOf, &mut Transform, &mut Visibility), With<AimReticle>>,
-        Query<(&ChildOf, &mut Transform, &mut Visibility, &mut Sprite), With<ChargeBar>>,
-        Query<(&ChildOf, &mut Transform, &Pupil)>,
+        Query<
+            (&ChildOf, &mut Transform, &mut Visibility),
+            (With<AimReticle>, Without<FrogVis>, Without<CrateVis>, Without<ProjVis>),
+        >,
+        Query<
+            (&ChildOf, &mut Transform, &mut Visibility, &mut Sprite),
+            (With<ChargeBar>, Without<FrogVis>, Without<CrateVis>, Without<ProjVis>),
+        >,
+        Query<
+            (&ChildOf, &mut Transform, &Pupil),
+            (Without<FrogVis>, Without<CrateVis>, Without<ProjVis>),
+        >,
         Query<(&ChildOf, &mut Text2d, &mut TextColor), With<HpTag>>,
         Query<(&ChildOf, &mut Text2d), With<NameTag>>,
     )>,

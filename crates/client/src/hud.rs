@@ -82,7 +82,7 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
                     ScoreText(0),
                 ));
                 p.spawn((
-                    Text::new("·"),
+                    Text::new(":"),
                     TextFont::from_font_size(16.0),
                     TextColor(Color::WHITE),
                 ));
@@ -161,7 +161,7 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
         ))
         .with_children(|p| {
             p.spawn((
-                Text::new(format!("room {} — share the link to invite", net.room)),
+                Text::new(format!("room {} - share the link to invite", net.room)),
                 TextFont::from_font_size(12.0),
                 TextColor(Color::srgb(0.8, 0.85, 0.9)),
             ));
@@ -170,20 +170,28 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Px(10.0),
+                top: Val::Px(8.0),
                 right: Val::Px(10.0),
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                flex_direction: FlexDirection::Column,
                 ..default()
             },
             BackgroundColor(PANEL),
             BorderRadius::all(Val::Px(6.0)),
         ))
         .with_children(|p| {
-            p.spawn((
-                Text::new("A/D move · Space jump · LMB tongue · W/S reel · RMB charge, release fires · 1-3 weapon · -/= zoom"),
-                TextFont::from_font_size(11.0),
-                TextColor(Color::srgb(0.75, 0.78, 0.82)),
-            ));
+            for line in [
+                "A/D move   Space jump",
+                "LMB tongue   W/S reel",
+                "RMB charge, release fires",
+                "1-3 weapon   -/= zoom",
+            ] {
+                p.spawn((
+                    Text::new(line),
+                    TextFont::from_font_size(11.0),
+                    TextColor(Color::srgb(0.75, 0.78, 0.82)),
+                ));
+            }
         });
 
     // center banner + connecting overlay
