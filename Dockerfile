@@ -5,7 +5,7 @@ FROM rust:1.88-bookworm AS builder
 ARG TRUNK_VERSION=0.21.14
 
 RUN rustup target add wasm32-unknown-unknown \
-    && cargo install trunk --version "${TRUNK_VERSION}" --locked
+    && curl -L "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-$(rustc -vV | sed -n 's/host: //p').tar.gz" | tar -xz -C /usr/local/cargo/bin
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
