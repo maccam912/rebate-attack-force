@@ -1,0 +1,7 @@
+[build]
+target = "index.html"
+dist = "../../dist"
+release = true
+
+[serve]
+# We don't use `trunk serve`; the game server serves ../../dist itself.
