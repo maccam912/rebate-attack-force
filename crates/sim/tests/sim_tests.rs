@@ -195,6 +195,102 @@ fn tongue_attaches_swings_and_releases() {
     assert!(len_after < ROPE_RANGE);
 }
 
+#[test]
+fn jump_hops_forward_and_double_tap_backflips() {
+    let (mut s, ids) = round_sim(1);
+    let id = ids[0];
+    // Find a spawn where the frog settles on flat ground with headroom, so
+    // the hop impulse isn't slope-tilted (frogs can slide off their spawn).
+    let mut placed = false;
+    for sp in s.terrain.spawn_points() {
+        {
+            let f = s.frogs.iter_mut().find(|f| f.id == id).unwrap();
+            f.pos = sp;
+            f.vel = Vec2::ZERO;
+        }
+        step_frozen(&mut s, 120);
+        let f = s.frog(id).unwrap();
+        if f.grounded
+            && f.ground_normal.y < -0.95
+            && s.terrain.raycast(f.pos, v2(0.0, -1.0), 160.0).is_none()
+        {
+            placed = true;
+            break;
+        }
+    }
+    assert!(placed, "found a flat spawn with headroom");
+    s.events.clear();
+    let p0 = s.frog(id).unwrap().pos;
+    let facing = s.frog(id).unwrap().facing;
+
+    // single tap: shallow hop forward in the facing direction
+    s.set_input(id, input(BTN_JUMP, v2(facing, 0.0)));
+    step_frozen(&mut s, 2);
+    let v = s.frog(id).unwrap().vel;
+    assert!(v.y < 0.0, "hop rises");
+    assert!(
+        v.x * facing > 0.0 && v.x.abs() > v.y.abs() * 0.5,
+        "hop is shallow and forward, vel={v:?}"
+    );
+
+    // second tap inside the window: converted into a backflip
+    s.set_input(id, input(0, v2(facing, 0.0)));
+    step_frozen(&mut s, 3);
+    s.set_input(id, input(BTN_JUMP, v2(facing, 0.0)));
+    step_frozen(&mut s, 1);
+    let f = s.frog(id).unwrap();
+    assert!(f.jump_t == 0.0, "backflip consumed the window");
+    let v = f.vel;
+    assert!(
+        v.x * facing < 0.0 && -v.y > v.x.abs() * 2.0,
+        "backflip goes mostly up, slightly back, vel={v:?}"
+    );
+    // it should rise clearly higher than where it started
+    let mut min_y = p0.y;
+    for _ in 0..60 {
+        s.step();
+        s.phase_t = 0.0;
+        min_y = min_y.min(s.frog(id).unwrap().pos.y);
+    }
+    assert!(p0.y - min_y > 50.0, "backflip rose {}", p0.y - min_y);
+}
+
+#[test]
+fn rope_fold_holds_until_frog_swings_back() {
+    let (mut s, ids) = round_sim(1);
+    let id = ids[0];
+    let p = place_at_spawn(&mut s, id, |s, p| {
+        s.terrain.raycast(p, v2(0.0, -1.0), 160.0).is_none()
+    });
+    let a1 = p + v2(0.0, -80.0); // fold pivot straight above the frog
+    let a0 = a1 + v2(-60.0, 0.0); // original anchor, off to the side
+    let wind = (a1 - a0).cross(p - a1).signum();
+    {
+        let f = s.frogs.iter_mut().find(|f| f.id == id).unwrap();
+        f.rope = Some(Rope {
+            anchors: vec![a0, a1],
+            winds: vec![wind],
+            length: 200.0,
+        });
+        f.vel = Vec2::ZERO;
+    }
+    s.set_input(id, input(BTN_TONGUE, v2(0.0, -1.0)));
+    step_frozen(&mut s, 1);
+    // The frog has a clear line of sight to a0, but it hasn't swung back
+    // past the fold — the rope must stay hung up on it.
+    let f = s.frog(id).unwrap();
+    assert_eq!(f.rope.as_ref().unwrap().anchors.len(), 2, "fold held");
+    // Move the frog across the a0→a1 line: now the fold unwinds.
+    {
+        let f = s.frogs.iter_mut().find(|f| f.id == id).unwrap();
+        f.pos = a1 + v2(10.0, -30.0);
+        f.vel = Vec2::ZERO;
+    }
+    step_frozen(&mut s, 1);
+    let f = s.frog(id).unwrap();
+    assert_eq!(f.rope.as_ref().unwrap().anchors.len(), 1, "fold unwound");
+}
+
 // ---------- rules ----------
 
 #[test]
@@ -387,12 +483,48 @@ fn full_match_to_ten_kills_and_reset() {
         .events
         .iter()
         .any(|e| matches!(e, Event::MatchEnd { .. })));
-    // match resets after the end screen
+    // after the end screen everyone returns to the lobby, scores wiped
     s.phase_t = ENDED_TIME + 1.0;
     s.step();
     assert_eq!(s.scores, [0, 0]);
-    assert_eq!(s.phase, Phase::Pre);
+    assert_eq!(s.phase, Phase::Lobby);
     assert!(s.frogs.iter().all(|f| f.alive));
+}
+
+#[test]
+fn lobby_gates_match_and_mode_select_reassigns_teams() {
+    let mut s = Sim::new(SEED);
+    assert_eq!(s.phase, Phase::Lobby);
+    let a = s.add_player();
+    let b = s.add_player();
+    let c = s.add_player();
+    // Teams (default): balanced two-team split
+    let teams: Vec<u8> = s.frogs.iter().map(|f| f.team).collect();
+    assert_eq!(teams, [0, 1, 0]);
+    // the lobby never starts on its own
+    for _ in 0..(5.0 / DT) as usize {
+        s.step();
+    }
+    assert_eq!(s.phase, Phase::Lobby);
+    // FFA: everyone gets their own team, scores/stash sized to match
+    s.set_mode(Mode::Ffa);
+    let teams: Vec<u8> = s.frogs.iter().map(|f| f.team).collect();
+    assert_eq!(teams, [0, 1, 2]);
+    assert_eq!(s.scores.len(), 3);
+    assert_eq!(s.inventory.len(), 3);
+    // a fourth joiner gets the next free team
+    let d = s.add_player();
+    assert_eq!(s.frog(d).unwrap().team, 3);
+    // if someone leaves, their team slot is recycled for the next joiner
+    s.remove_player(b);
+    let e = s.add_player();
+    assert_eq!(s.frog(e).unwrap().team, 1);
+    // ready-up starts the match; mode is locked outside the lobby
+    s.start_match();
+    assert_eq!(s.phase, Phase::Pre);
+    s.set_mode(Mode::Teams);
+    assert_eq!(s.mode, Mode::Ffa);
+    let _ = (a, c);
 }
 
 #[test]

@@ -14,7 +14,7 @@ use protocol::{
     ClientMsg, CrateSnap, DebugCmd, FrogSnap, PlayerMeta, ProjSnap, ServerMsg, Snapshot,
     PROTOCOL_VERSION,
 };
-use sim::game::{Event, Input, Sim, DT};
+use sim::game::{Event, Input, Mode, Phase, Sim, DT};
 use sim::math::Vec2;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -42,6 +42,13 @@ pub enum RoomCmd {
         id: u8,
         input: Input,
     },
+    Ready {
+        id: u8,
+        ready: bool,
+    },
+    SetMode {
+        mode: Mode,
+    },
     Debug {
         id: u8,
         cmd: DebugCmd,
@@ -50,6 +57,7 @@ pub enum RoomCmd {
 
 struct Client {
     name: String,
+    ready: bool,
     out: mpsc::UnboundedSender<Vec<u8>>,
 }
 
@@ -84,7 +92,14 @@ async fn room_task(code: String, mut rx: mpsc::UnboundedReceiver<RoomCmd>, state
                         carves: carves.clone(),
                     };
                     let _ = out.send(protocol::encode(&welcome));
-                    clients.insert(id, Client { name, out });
+                    clients.insert(
+                        id,
+                        Client {
+                            name,
+                            ready: false,
+                            out,
+                        },
+                    );
                     let _ = reply.send(id);
                     broadcast_roster(&game, &clients);
                     info!("room {code}: player {id} joined ({} online)", clients.len());
@@ -92,10 +107,23 @@ async fn room_task(code: String, mut rx: mpsc::UnboundedReceiver<RoomCmd>, state
                 Ok(RoomCmd::Leave { id }) => {
                     clients.remove(&id);
                     game.remove_player(id);
+                    // The last holdout leaving may make everyone-else ready.
+                    try_start_match(&code, &mut game, &mut clients);
                     broadcast_roster(&game, &clients);
                     info!("room {code}: player {id} left ({} online)", clients.len());
                 }
                 Ok(RoomCmd::Input { id, input }) => game.set_input(id, input),
+                Ok(RoomCmd::Ready { id, ready }) => {
+                    if let Some(c) = clients.get_mut(&id) {
+                        c.ready = ready;
+                    }
+                    try_start_match(&code, &mut game, &mut clients);
+                    broadcast_roster(&game, &clients);
+                }
+                Ok(RoomCmd::SetMode { mode }) => {
+                    game.set_mode(mode);
+                    broadcast_roster(&game, &clients);
+                }
                 Ok(RoomCmd::Debug { id, cmd }) => {
                     if state.dev_hooks {
                         match cmd {
@@ -142,6 +170,18 @@ async fn room_task(code: String, mut rx: mpsc::UnboundedReceiver<RoomCmd>, state
     }
 }
 
+/// Start the match when the lobby has players and they're all ready.
+fn try_start_match(code: &str, game: &mut Sim, clients: &mut HashMap<u8, Client>) {
+    if game.phase != Phase::Lobby || clients.is_empty() || !clients.values().all(|c| c.ready) {
+        return;
+    }
+    game.start_match();
+    for c in clients.values_mut() {
+        c.ready = false; // fresh lobby after the match ends
+    }
+    info!("room {code}: all ready, match starting ({:?})", game.mode);
+}
+
 fn broadcast_roster(game: &Sim, clients: &HashMap<u8, Client>) {
     let roster: Vec<PlayerMeta> = game
         .frogs
@@ -151,6 +191,7 @@ fn broadcast_roster(game: &Sim, clients: &HashMap<u8, Client>) {
                 id: f.id,
                 name: c.name.clone(),
                 team: f.team,
+                ready: c.ready,
             })
         })
         .collect();
@@ -166,8 +207,9 @@ fn build_snapshot(game: &Sim, events: Vec<Event>) -> Snapshot {
         phase: game.phase,
         phase_t: game.phase_t,
         round: game.round,
-        scores: game.scores,
-        inventory: game.inventory,
+        mode: game.mode,
+        scores: game.scores.clone(),
+        inventory: game.inventory.clone(),
         frogs: game
             .frogs
             .iter()
@@ -280,6 +322,12 @@ async fn handle_socket(mut socket: WebSocket, q: WsQuery, state: Arc<AppState>) 
                 Some(Ok(Message::Binary(b))) => match protocol::decode::<ClientMsg>(&b) {
                     Some(ClientMsg::Input(input)) => {
                         let _ = room_tx.send(RoomCmd::Input { id: my_id, input });
+                    }
+                    Some(ClientMsg::Ready(ready)) => {
+                        let _ = room_tx.send(RoomCmd::Ready { id: my_id, ready });
+                    }
+                    Some(ClientMsg::SetMode(mode)) => {
+                        let _ = room_tx.send(RoomCmd::SetMode { mode });
                     }
                     Some(ClientMsg::Ping(n)) => {
                         let bytes = protocol::encode(&ServerMsg::Pong(n));

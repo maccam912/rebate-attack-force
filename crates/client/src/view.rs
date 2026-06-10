@@ -10,10 +10,22 @@ use sim::rng::hash2;
 use sim::terrain::{GRID_H, GRID_W, HEIGHT, WATER_Y, WIDTH};
 use std::collections::HashMap;
 
-pub const TEAM_COLORS: [Color; 2] = [
+/// Team palette: 0/1 are the classic green/pink Teams pair; the rest serve
+/// free-for-all, cycling if more than 8 players join.
+pub const TEAM_COLORS: [Color; 8] = [
     Color::srgb(0.45, 0.80, 0.25), // green
     Color::srgb(0.95, 0.45, 0.75), // pink
+    Color::srgb(0.35, 0.65, 0.95), // blue
+    Color::srgb(0.95, 0.75, 0.25), // gold
+    Color::srgb(0.70, 0.45, 0.95), // purple
+    Color::srgb(0.95, 0.50, 0.30), // orange
+    Color::srgb(0.30, 0.85, 0.80), // teal
+    Color::srgb(0.85, 0.85, 0.90), // white
 ];
+
+pub fn team_color(team: u8) -> Color {
+    TEAM_COLORS[team as usize % TEAM_COLORS.len()]
+}
 
 /// sim (y-down) → bevy (y-up, centered)
 pub fn w2b(p: sim::Vec2, z: f32) -> Vec3 {
@@ -248,6 +260,7 @@ pub struct VisIndex {
 #[allow(clippy::too_many_arguments)]
 pub fn sync_world(
     mut commands: Commands,
+    time: Res<Time>,
     net: Res<NetState>,
     tex: Res<Textures>,
     mut vis: ResMut<VisIndex>,
@@ -294,24 +307,30 @@ pub fn sync_world(
         });
         if let Ok((_, mut tr, mut vis_, mut sprite)) = frog_q.get_mut(entity) {
             tr.translation = w2b(pos, 10.0);
-            // velocity stretch
+            // velocity stretch: only at swing speeds (well above jump speed,
+            // so a plain hop never tips the frog) and eased over time so the
+            // pose never snaps.
             let speed = fb.vel.length();
-            let s = 1.0 + (speed / 2400.0).min(0.22);
             let dir = Vec2::new(fb.vel.x, -fb.vel.y).normalize_or_zero();
-            if speed > 240.0 && dir != Vec2::ZERO {
-                tr.rotation = Quat::from_rotation_z(dir.y.atan2(dir.x));
-                tr.scale = Vec3::new(s, 1.0 / s, 1.0);
+            let (target_rot, target_scale) = if speed > 430.0 && dir != Vec2::ZERO {
+                let s = 1.0 + (speed / 2400.0).min(0.22);
+                (
+                    Quat::from_rotation_z(dir.y.atan2(dir.x)),
+                    Vec3::new(s, 1.0 / s, 1.0),
+                )
             } else {
-                tr.rotation = Quat::IDENTITY;
-                tr.scale = Vec3::ONE;
-            }
+                (Quat::IDENTITY, Vec3::ONE)
+            };
+            let ease = 1.0 - (-12.0 * time.delta_secs()).exp();
+            tr.rotation = tr.rotation.slerp(target_rot, ease);
+            tr.scale = tr.scale.lerp(target_scale, ease);
             *vis_ = if fb.alive {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
             };
             // flash white-red shortly after damage
-            let base = TEAM_COLORS[team as usize];
+            let base = team_color(team);
             sprite.color = if fb.hp < 35.0 {
                 base.mix(&Color::srgb(0.9, 0.2, 0.15), 0.35)
             } else {
@@ -490,7 +509,7 @@ fn spawn_frog(
     is_me: bool,
     team: u8,
 ) -> Entity {
-    let color = TEAM_COLORS[team as usize];
+    let color = team_color(team);
     commands
         .spawn((
             Sprite {

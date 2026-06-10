@@ -6,9 +6,40 @@ use crate::view::w2b;
 use bevy::prelude::*;
 use protocol::ClientMsg;
 use sim::game::{
-    Input as SimInput, BTN_DOWN, BTN_FIRE, BTN_JUMP, BTN_LEFT, BTN_RIGHT, BTN_TONGUE, BTN_UP,
-    NUM_WEAPONS,
+    Input as SimInput, Mode, Phase, BTN_DOWN, BTN_FIRE, BTN_JUMP, BTN_LEFT, BTN_RIGHT, BTN_TONGUE,
+    BTN_UP, NUM_WEAPONS,
 };
+
+/// Lobby controls: M switches game mode, R toggles ready.
+pub fn lobby_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    net: Res<NetState>,
+    socket: Option<NonSendMut<NetSocket>>,
+) {
+    let Some(mut socket) = socket else { return };
+    if !net.connected {
+        return;
+    }
+    let Some(snap) = net.latest() else { return };
+    if snap.phase != Phase::Lobby {
+        return;
+    }
+    if keys.just_pressed(KeyCode::KeyM) {
+        let next = match snap.mode {
+            Mode::Teams => Mode::Ffa,
+            Mode::Ffa => Mode::Teams,
+        };
+        send_msg(&mut socket, &ClientMsg::SetMode(next));
+    }
+    if keys.just_pressed(KeyCode::KeyR) {
+        let ready = net
+            .my_id
+            .and_then(|id| net.roster.iter().find(|p| p.id == id))
+            .map(|p| p.ready)
+            .unwrap_or(false);
+        send_msg(&mut socket, &ClientMsg::Ready(!ready));
+    }
+}
 
 #[derive(Resource, Default)]
 pub struct Selected(pub u8);
@@ -62,7 +93,10 @@ pub fn gather_and_send(
     if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
         buttons |= BTN_DOWN;
     }
-    if keys.pressed(KeyCode::Space) {
+    if keys.pressed(KeyCode::Enter)
+        || keys.pressed(KeyCode::NumpadEnter)
+        || keys.pressed(KeyCode::Space)
+    {
         buttons |= BTN_JUMP;
     }
     if mouse.pressed(MouseButton::Left) {

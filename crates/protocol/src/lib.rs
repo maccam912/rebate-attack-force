@@ -1,16 +1,20 @@
 //! Wire messages between client and server. Binary (bincode) over WebSocket.
 
 use serde::{Deserialize, Serialize};
-use sim::game::{Event, Input, Phase, Weapon, NUM_WEAPONS};
+use sim::game::{Event, Input, Mode, Phase, Weapon, NUM_WEAPONS};
 use sim::math::Vec2;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientMsg {
     Hello { name: String, room: String },
     Input(Input),
     Ping(u32),
+    /// Lobby: toggle this player's ready flag. Match starts when all ready.
+    Ready(bool),
+    /// Lobby: pick the game mode (any player may).
+    SetMode(Mode),
     /// Only honored when the server runs with DEV_HOOKS=1.
     Debug(DebugCmd),
 }
@@ -26,6 +30,7 @@ pub struct PlayerMeta {
     pub id: u8,
     pub name: String,
     pub team: u8,
+    pub ready: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,8 +69,10 @@ pub struct Snapshot {
     pub phase: Phase,
     pub phase_t: f32,
     pub round: u32,
-    pub scores: [u8; 2],
-    pub inventory: [[u8; NUM_WEAPONS]; 2],
+    pub mode: Mode,
+    /// Indexed by team; Teams mode has 2 entries, FFA one per player.
+    pub scores: Vec<u8>,
+    pub inventory: Vec<[u8; NUM_WEAPONS]>,
     pub frogs: Vec<FrogSnap>,
     pub crates: Vec<CrateSnap>,
     pub projectiles: Vec<ProjSnap>,

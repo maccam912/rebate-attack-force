@@ -36,6 +36,10 @@ impl Vec2 {
     pub fn perp(self) -> Vec2 {
         v2(-self.y, self.x)
     }
+    /// 2D cross product (z component of the 3D cross).
+    pub fn cross(self, o: Vec2) -> f32 {
+        self.x * o.y - self.y * o.x
+    }
     pub fn clamp_length(self, max: f32) -> Vec2 {
         let l2 = self.length_sq();
         if l2 > max * max {

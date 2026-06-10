@@ -2,9 +2,10 @@
 
 use crate::input::Selected;
 use crate::net::NetState;
-use crate::view::TEAM_COLORS;
+use crate::view::{team_color, TEAM_COLORS};
 use bevy::prelude::*;
-use sim::game::{Event as SimEvent, Phase, Weapon, NUM_WEAPONS, PRE_TIME, ROUND_TIME};
+use protocol::PlayerMeta;
+use sim::game::{Event as SimEvent, Mode, Phase, Weapon, NUM_WEAPONS, PRE_TIME, ROUND_TIME};
 
 #[derive(Component)]
 pub struct PhaseText;
@@ -18,6 +19,10 @@ pub struct SlotText(pub u8);
 pub struct BannerText;
 #[derive(Component)]
 pub struct ConnText;
+#[derive(Component)]
+pub struct LobbyPanel;
+#[derive(Component)]
+pub struct LobbyText;
 
 #[derive(Resource, Default)]
 pub struct Banner {
@@ -181,7 +186,7 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
         ))
         .with_children(|p| {
             for line in [
-                "A/D move   Space jump",
+                "A/D move   Enter jump (2x backflip)",
                 "LMB tongue   W/S reel",
                 "RMB charge, release fires",
                 "1-3 weapon   -/= zoom",
@@ -192,6 +197,40 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
                     TextColor(Color::srgb(0.75, 0.78, 0.82)),
                 ));
             }
+        });
+
+    // lobby panel (visible only during Phase::Lobby)
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Percent(24.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            Visibility::Hidden,
+            LobbyPanel,
+        ))
+        .with_children(|p| {
+            p.spawn((
+                Node {
+                    padding: UiRect::axes(Val::Px(22.0), Val::Px(14.0)),
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+                BackgroundColor(PANEL),
+                BorderRadius::all(Val::Px(10.0)),
+            ))
+            .with_children(|p| {
+                p.spawn((
+                    Text::new(""),
+                    TextFont::from_font_size(17.0),
+                    TextColor(Color::srgb(0.92, 0.94, 0.97)),
+                    LobbyText,
+                ));
+            });
         });
 
     // center banner + connecting overlay
@@ -231,19 +270,33 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
         });
 }
 
+/// Display name for a winning team: team name in Teams, player name in FFA.
+fn winner_label(winner: u8, mode: Mode, roster: &[PlayerMeta]) -> String {
+    match mode {
+        Mode::Teams => (if winner == 0 { "GREEN" } else { "PINK" }).to_string(),
+        Mode::Ffa => roster
+            .iter()
+            .find(|p| p.team == winner)
+            .map(|p| p.name.to_uppercase())
+            .unwrap_or_else(|| format!("FROG {winner}")),
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub fn update_hud(
     time: Res<Time>,
     net: Res<NetState>,
     sel: Res<Selected>,
     mut banner: ResMut<Banner>,
+    mut lobby_vis: Query<&mut Visibility, With<LobbyPanel>>,
     mut texts: ParamSet<(
         Query<&mut Text, With<PhaseText>>,
-        Query<(&mut Text, &ScoreText)>,
+        Query<(&mut Text, &mut TextColor, &ScoreText)>,
         Query<&mut Text, With<StatusText>>,
         Query<(&mut Text, &mut TextColor, &SlotText)>,
         Query<(&mut Text, &mut TextColor), (With<BannerText>, Without<SlotText>)>,
         Query<&mut Text, With<ConnText>>,
+        Query<&mut Text, With<LobbyText>>,
     )>,
 ) {
     // connecting overlay
@@ -263,8 +316,38 @@ pub fn update_hud(
     }
     let Some(snap) = net.latest() else { return };
 
+    // lobby panel
+    let in_lobby = snap.phase == Phase::Lobby;
+    for mut v in lobby_vis.iter_mut() {
+        *v = if in_lobby {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if in_lobby {
+        let mode_str = match snap.mode {
+            Mode::Teams => "TEAMS — green vs pink, shared stash",
+            Mode::Ffa => "FREE-FOR-ALL — every frog for itself",
+        };
+        let mut txt = format!("mode: {mode_str}\n[M] switch mode    [R] ready up\n");
+        for p in &net.roster {
+            txt += &format!(
+                "\n{}  {}",
+                if p.ready { "[READY]" } else { "[ -- ]" },
+                p.name
+            );
+        }
+        if let Ok(mut t) = texts.p6().single_mut() {
+            if t.0 != txt {
+                t.0 = txt;
+            }
+        }
+    }
+
     // phase line
     let phase_str = match snap.phase {
+        Phase::Lobby => "LOBBY".to_string(),
         Phase::Pre => format!("GET READY  {:.0}", (PRE_TIME - snap.phase_t).max(0.0).ceil()),
         Phase::Round => {
             let left = (ROUND_TIME - snap.phase_t).max(0.0);
@@ -272,8 +355,8 @@ pub fn update_hud(
         }
         Phase::Break => "ROUND OVER".to_string(),
         Phase::Ended { winner } => format!(
-            "{} TEAM WINS THE MATCH",
-            if winner == 0 { "GREEN" } else { "PINK" }
+            "{} WINS THE MATCH",
+            winner_label(winner, snap.mode, &net.roster)
         ),
     };
     if let Ok(mut t) = texts.p0().single_mut() {
@@ -282,31 +365,56 @@ pub fn update_hud(
         }
     }
 
-    // scores
-    for (mut t, s) in texts.p1().iter_mut() {
-        let txt = match s.0 {
-            0 => format!("GREEN {}", snap.scores[0]),
-            _ => format!("{} PINK", snap.scores[1]),
+    // scores: team pair in Teams mode; you vs the leader in FFA
+    let my_team = net
+        .my_id
+        .and_then(|id| net.roster.iter().find(|p| p.id == id))
+        .map(|p| p.team as usize)
+        .unwrap_or(0);
+    let score_of = |team: usize| *snap.scores.get(team).unwrap_or(&0);
+    for (mut t, mut c, s) in texts.p1().iter_mut() {
+        let (txt, color) = match (snap.mode, s.0) {
+            (Mode::Teams, 0) => (format!("GREEN {}", score_of(0)), TEAM_COLORS[0]),
+            (Mode::Teams, _) => (format!("{} PINK", score_of(1)), TEAM_COLORS[1]),
+            (Mode::Ffa, 0) => (
+                format!("YOU {}", score_of(my_team)),
+                team_color(my_team as u8),
+            ),
+            (Mode::Ffa, _) => {
+                // best score among the other teams
+                let lead = snap
+                    .scores
+                    .iter()
+                    .enumerate()
+                    .filter(|(t, _)| *t != my_team)
+                    .max_by_key(|(_, s)| **s);
+                match lead {
+                    Some((team, s)) => (format!("{s} BEST"), team_color(team as u8)),
+                    None => ("- BEST".to_string(), Color::WHITE),
+                }
+            }
         };
         if t.0 != txt {
             t.0 = txt;
         }
+        c.0 = color;
     }
 
     // status + slots (need my frog/team)
     let me = net
         .my_id
         .and_then(|id| snap.frogs.iter().find(|f| f.id == id));
-    let my_team = net
-        .my_id
-        .and_then(|id| net.roster.iter().find(|p| p.id == id))
-        .map(|p| p.team as usize)
-        .unwrap_or(0);
+    let ammo = |slot: usize| {
+        snap.inventory
+            .get(my_team)
+            .map(|inv| inv[slot])
+            .unwrap_or(0)
+    };
     let status = match me {
         Some(f) if !f.alive => "down for this round — respawning next round".to_string(),
         Some(f) if f.charge.is_some() => "release to FIRE!".to_string(),
         Some(f) if f.armed => {
-            if snap.inventory[my_team][sel.0 as usize] > 0 {
+            if ammo(sel.0 as usize) > 0 {
                 "ARMED — hold RMB to charge, release to fire".to_string()
             } else {
                 "ARMED — but no ammo in this slot, pick 1-3".to_string()
@@ -322,7 +430,7 @@ pub fn update_hud(
     }
     for (mut t, mut c, slot) in texts.p3().iter_mut() {
         let w = Weapon::from_index(slot.0);
-        let count = snap.inventory[my_team][slot.0 as usize];
+        let count = ammo(slot.0 as usize);
         let txt = format!("{} {} x{}", slot.0 + 1, weapon_name(w), count);
         if t.0 != txt {
             t.0 = txt;
@@ -350,7 +458,7 @@ pub fn update_hud(
                 banner.t = 1.4;
             }
             SimEvent::MatchEnd { winner } => {
-                banner.text = format!("{} WINS!", if *winner == 0 { "GREEN" } else { "PINK" });
+                banner.text = format!("{} WINS!", winner_label(*winner, snap.mode, &net.roster));
                 banner.t = 5.0;
             }
             SimEvent::MatchReset => {

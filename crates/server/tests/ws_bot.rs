@@ -2,7 +2,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use protocol::{ClientMsg, DebugCmd, ServerMsg, Snapshot};
-use sim::game::{Event, Input, Phase, BTN_FIRE, BTN_LEFT, BTN_RIGHT};
+use sim::game::{Event, Input, Mode, Phase, BTN_FIRE, BTN_LEFT, BTN_RIGHT};
 use sim::math::v2;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -91,7 +91,8 @@ async fn full_loop_join_walk_collect_fire() {
     let port = start_server().await;
     let (mut ws, my_id) = connect(port, "ITEST", "bot").await;
 
-    // Wait for the round to begin (Pre phase is 3 s).
+    // Ready up in the lobby, then wait for the round (Pre phase is 3 s).
+    send(&mut ws, &ClientMsg::Ready(true)).await;
     wait_for(&mut ws, 8.0, |s| s.phase == Phase::Round).await;
 
     let me = |s: &Snapshot| s.frogs.iter().find(|f| f.id == my_id).cloned().unwrap();
@@ -134,6 +135,34 @@ async fn full_loop_join_walk_collect_fire() {
     .await;
     let f = snap.frogs.iter().find(|f| f.id == my_id).unwrap();
     assert!(!f.armed, "one shot per round: disarmed after firing");
+}
+
+#[tokio::test]
+async fn lobby_waits_for_all_ready_and_any_player_switches_mode() {
+    let port = start_server().await;
+    let (mut a, _) = connect(port, "LOBBYX", "alice").await;
+    let (mut b, _) = connect(port, "LOBBYX", "bob").await;
+
+    let s0 = next_snapshot(&mut a).await;
+    assert_eq!(s0.phase, Phase::Lobby);
+
+    // One ready out of two isn't enough — a second later, still lobby.
+    send(&mut a, &ClientMsg::Ready(true)).await;
+    let t0 = next_snapshot(&mut a).await.tick;
+    let s = wait_for(&mut a, 10.0, |s| s.tick >= t0 + 120).await;
+    assert_eq!(s.phase, Phase::Lobby);
+
+    // Any player may switch the mode.
+    send(&mut b, &ClientMsg::SetMode(Mode::Ffa)).await;
+    let s = wait_for(&mut a, 5.0, |s| s.mode == Mode::Ffa).await;
+    assert_eq!(s.phase, Phase::Lobby);
+
+    // Everyone ready → the match starts in the chosen mode.
+    send(&mut b, &ClientMsg::Ready(true)).await;
+    let s = wait_for(&mut a, 5.0, |s| s.phase != Phase::Lobby).await;
+    assert_eq!(s.mode, Mode::Ffa);
+
+    let _ = (a.close(None).await, b.close(None).await);
 }
 
 #[tokio::test]

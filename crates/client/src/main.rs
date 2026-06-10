@@ -51,6 +51,7 @@ fn main() {
                     view::update_fx,
                     view::camera_follow,
                     input::gather_and_send,
+                    input::lobby_keys,
                     hud::update_hud,
                     sfx::play_events,
                 ),

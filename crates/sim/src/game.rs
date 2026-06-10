@@ -13,8 +13,12 @@ pub const CRATE_R: f32 = 12.0;
 pub const WALK_SPEED: f32 = 170.0;
 pub const WALK_ACC: f32 = 1600.0;
 pub const AIR_ACC: f32 = 330.0;
-pub const JUMP_NORMAL: f32 = 330.0;
-pub const JUMP_SIDE: f32 = 130.0;
+pub const JUMP_UP: f32 = 290.0;
+pub const JUMP_FWD: f32 = 240.0;
+pub const BACKFLIP_UP: f32 = 430.0;
+pub const BACKFLIP_BACK: f32 = 90.0;
+/// Second jump tap within this window converts the hop into a backflip.
+pub const BACKFLIP_WINDOW: f32 = 0.25;
 
 pub const ROPE_RANGE: f32 = 480.0;
 pub const ROPE_MIN: f32 = 26.0;
@@ -95,6 +99,10 @@ pub struct Rope {
     /// anchors[0] is the original attachment; later entries are terrain folds.
     /// The last entry is the active pivot.
     pub anchors: Vec<Vec2>,
+    /// Bend sign at each fold, parallel to anchors[1..]: which side of the
+    /// prev→fold line the frog was on when the fold formed. The fold only
+    /// unwinds when the frog crosses back over that line.
+    pub winds: Vec<f32>,
     pub length: f32,
 }
 
@@ -140,6 +148,10 @@ pub struct Frog {
     pub input: Input,
     pub prev_input: Input,
     pub hurt_t: f32,
+    /// Time left to double-tap jump into a backflip, plus the hop impulse
+    /// the backflip replaces.
+    pub jump_t: f32,
+    pub jump_impulse: Vec2,
     pub contact_dmg_cd: f32,
     pub bounce_sound_cd: f32,
     pub last_hit_by: Option<(u8, u64)>,
@@ -164,6 +176,8 @@ impl Frog {
             input: Input::default(),
             prev_input: Input::default(),
             hurt_t: 0.0,
+            jump_t: 0.0,
+            jump_impulse: Vec2::ZERO,
             contact_dmg_cd: 0.0,
             bounce_sound_cd: 0.0,
             last_hit_by: None,
@@ -197,8 +211,19 @@ pub struct Projectile {
     pub triggered: bool,
 }
 
+/// Game mode, chosen in the lobby.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mode {
+    /// Two teams (green vs pink) with a shared weapon stash.
+    Teams,
+    /// Every player is their own team: own color, own stash.
+    Ffa,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Phase {
+    /// Pre-game: pick a mode, ready up. No controls, no rounds.
+    Lobby,
     Pre,
     Round,
     Break,
@@ -234,9 +259,11 @@ pub struct Sim {
     pub phase: Phase,
     pub phase_t: f32,
     pub round: u32,
-    pub scores: [u8; 2],
+    pub mode: Mode,
+    /// Indexed by team. Teams mode has exactly 2; FFA one per player.
+    pub scores: Vec<u8>,
     /// Per-team shared weapon stock, persists across rounds.
-    pub inventory: [[u8; NUM_WEAPONS]; 2],
+    pub inventory: Vec<[u8; NUM_WEAPONS]>,
     pub frogs: Vec<Frog>,
     pub crates: Vec<CrateBox>,
     pub projectiles: Vec<Projectile>,
@@ -256,11 +283,12 @@ impl Sim {
             terrain,
             rng: Pcg32::new(seed ^ 0xC0FFEE),
             tick: 0,
-            phase: Phase::Pre,
+            phase: Phase::Lobby,
             phase_t: 0.0,
             round: 1,
-            scores: [0, 0],
-            inventory: [[0; NUM_WEAPONS]; 2],
+            mode: Mode::Teams,
+            scores: vec![0; 2],
+            inventory: vec![[0; NUM_WEAPONS]; 2],
             frogs: Vec::new(),
             crates: Vec::new(),
             projectiles: Vec::new(),
@@ -276,16 +304,73 @@ impl Sim {
     pub fn add_player(&mut self) -> u8 {
         let id = self.next_frog_id;
         self.next_frog_id = self.next_frog_id.wrapping_add(1);
-        let t0 = self.frogs.iter().filter(|f| f.team == 0).count();
-        let t1 = self.frogs.len() - t0;
-        let team = if t0 <= t1 { 0 } else { 1 };
+        let team = match self.mode {
+            Mode::Teams => {
+                let t0 = self.frogs.iter().filter(|f| f.team == 0).count();
+                let t1 = self.frogs.len() - t0;
+                if t0 <= t1 {
+                    0
+                } else {
+                    1
+                }
+            }
+            Mode::Ffa => {
+                // Smallest team index not in use; zero the slot in case a
+                // departed player left a stale score/stash behind.
+                let team = (0..=u8::MAX)
+                    .find(|t| self.frogs.iter().all(|f| f.team != *t))
+                    .unwrap_or(0);
+                if let Some(s) = self.scores.get_mut(team as usize) {
+                    *s = 0;
+                    self.inventory[team as usize] = [0; NUM_WEAPONS];
+                }
+                team
+            }
+        };
+        self.ensure_team(team);
         let pos = self.pick_spawn();
         self.frogs.push(Frog::new(id, team, pos));
         id
     }
 
+    fn ensure_team(&mut self, team: u8) {
+        let n = team as usize + 1;
+        if self.scores.len() < n {
+            self.scores.resize(n, 0);
+            self.inventory.resize(n, [0; NUM_WEAPONS]);
+        }
+    }
+
     pub fn remove_player(&mut self, id: u8) {
         self.frogs.retain(|f| f.id != id);
+    }
+
+    /// Lobby only: switch mode and reassign every frog's team to match.
+    pub fn set_mode(&mut self, mode: Mode) {
+        if self.phase != Phase::Lobby || mode == self.mode {
+            return;
+        }
+        self.mode = mode;
+        for (i, f) in self.frogs.iter_mut().enumerate() {
+            f.team = match mode {
+                Mode::Teams => (i % 2) as u8,
+                Mode::Ffa => i as u8,
+            };
+        }
+        let teams = match mode {
+            Mode::Teams => 2,
+            Mode::Ffa => self.frogs.len().max(1),
+        };
+        self.scores = vec![0; teams];
+        self.inventory = vec![[0; NUM_WEAPONS]; teams];
+    }
+
+    /// Lobby only: everyone readied up — fresh match in the chosen mode.
+    pub fn start_match(&mut self) {
+        if self.phase != Phase::Lobby {
+            return;
+        }
+        self.reset_match(Phase::Pre);
     }
 
     pub fn set_input(&mut self, id: u8, input: Input) {
@@ -337,7 +422,7 @@ impl Sim {
         if self.phase == Phase::Round {
             self.spawn_crates();
         }
-        let controls = !matches!(self.phase, Phase::Pre | Phase::Ended { .. });
+        let controls = !matches!(self.phase, Phase::Lobby | Phase::Pre | Phase::Ended { .. });
         let mut explosions: Vec<(Vec2, Weapon, u8, u8)> = Vec::new();
 
         for i in 0..self.frogs.len() {
@@ -358,6 +443,7 @@ impl Sim {
     fn advance_phase(&mut self) {
         self.phase_t += DT;
         match self.phase {
+            Phase::Lobby => {} // waits for start_match()
             Phase::Pre => {
                 if self.phase_t >= PRE_TIME {
                     self.start_round();
@@ -382,19 +468,20 @@ impl Sim {
             }
             Phase::Ended { .. } => {
                 if self.phase_t >= ENDED_TIME {
-                    self.reset_match();
+                    // Back to the lobby: pick a mode, ready up again.
+                    self.reset_match(Phase::Lobby);
                 }
             }
         }
     }
 
-    fn reset_match(&mut self) {
-        self.scores = [0, 0];
-        self.inventory = [[0; NUM_WEAPONS]; 2];
+    fn reset_match(&mut self, phase: Phase) {
+        self.scores.iter_mut().for_each(|s| *s = 0);
+        self.inventory.iter_mut().for_each(|i| *i = [0; NUM_WEAPONS]);
         self.round = 1;
         self.crates.clear();
         self.projectiles.clear();
-        self.phase = Phase::Pre;
+        self.phase = phase;
         self.phase_t = 0.0;
         for i in 0..self.frogs.len() {
             let pos = self.pick_spawn();
@@ -452,6 +539,7 @@ impl Sim {
             return;
         }
         f.hurt_t = (f.hurt_t - DT).max(0.0);
+        f.jump_t = (f.jump_t - DT).max(0.0);
         f.contact_dmg_cd = (f.contact_dmg_cd - DT).max(0.0);
         f.bounce_sound_cd = (f.bounce_sound_cd - DT).max(0.0);
         f.aim = if f.input.aim.length_sq() > 1e-6 {
@@ -477,6 +565,7 @@ impl Sim {
                     let length = f.pos.distance(hit);
                     f.rope = Some(Rope {
                         anchors: vec![hit],
+                        winds: Vec::new(),
                         length,
                     });
                     self.events.push(Event::TongueAttach { pos: hit });
@@ -502,6 +591,15 @@ impl Sim {
             f.ground_normal = n;
         }
 
+        // Double tap within the window (still airborne from the hop)
+        // converts it into a backflip: mostly straight up, slightly back.
+        if can_act && f.rope.is_none() && !f.grounded && f.jump_t > 0.0 && f.pressed(BTN_JUMP) {
+            f.vel -= f.jump_impulse;
+            f.vel += f.ground_normal * BACKFLIP_UP + v2(-f.facing * BACKFLIP_BACK, 0.0);
+            f.jump_t = 0.0;
+            self.events.push(Event::Jump { frog: f.id });
+        }
+
         if let Some(rope) = &mut f.rope {
             // --- attached: reel, folds, swing ---
             if can_act {
@@ -514,24 +612,45 @@ impl Sim {
                 rope.length = rope.length.clamp(ROPE_MIN, ROPE_RANGE);
             }
             // Wrap around terrain: the segment to the pivot must stay clear.
+            // Sample along the frog's last step too, so thin islands can't
+            // slip between the segment's positions at high swing speed.
             let pivot = rope.pivot();
-            let to = pivot - f.pos;
-            let dist = to.length();
-            if dist > 6.0 {
-                if let Some(hit) = self.terrain.raycast(f.pos, to, dist - 3.0) {
-                    let fold = hit + self.terrain.normal(hit) * 2.5;
-                    if fold.distance(pivot) > 8.0 {
-                        rope.anchors.push(fold);
+            let old = f.pos - f.vel * DT;
+            let mut fold_hit = None;
+            for k in [0.0f32, 0.5, 1.0] {
+                let p = old.lerp(f.pos, k);
+                let to = pivot - p;
+                let dist = to.length();
+                if dist > 6.0 {
+                    if let Some(hit) = self.terrain.raycast(p, to, dist - 3.0) {
+                        fold_hit = Some(hit);
+                        break;
                     }
                 }
             }
-            // Unwrap when the previous pivot is visible again.
-            if rope.anchors.len() > 1 {
-                let prev = rope.anchors[rope.anchors.len() - 2];
-                let to = prev - f.pos;
-                let d = to.length();
-                if d < 6.0 || self.terrain.raycast(f.pos, to, d - 3.0).is_none() {
+            if let Some(hit) = fold_hit {
+                let fold = hit + self.terrain.normal(hit) * 2.5;
+                if fold.distance(pivot) > 8.0 {
+                    let wind = (fold - pivot).cross(f.pos - fold);
+                    rope.anchors.push(fold);
+                    rope.winds.push(wind.signum());
+                }
+            }
+            // Unwrap only when the rope straightens back past a fold: the
+            // frog crosses to the other side of the line it was on when the
+            // fold formed. (Line-of-sight popping let the rope snap through
+            // small islands as soon as the anchor was visible around the
+            // far side.)
+            while rope.anchors.len() > 1 {
+                let n = rope.anchors.len();
+                let prev = rope.anchors[n - 2];
+                let pivot = rope.anchors[n - 1];
+                let side = (pivot - prev).cross(f.pos - pivot);
+                if side * rope.winds[n - 2] <= 0.0 {
                     rope.anchors.pop();
+                    rope.winds.pop();
+                } else {
+                    break;
                 }
             }
             // Swing: horizontal input projected on the swing tangent, so it
@@ -558,8 +677,12 @@ impl Sim {
             let dv = (target - vt).clamp(-WALK_ACC * DT, WALK_ACC * DT);
             f.vel += tangent * dv;
             if can_act && f.pressed(BTN_JUMP) {
-                f.vel += f.ground_normal * JUMP_NORMAL + v2(dir_x * JUMP_SIDE, 0.0);
+                // Shallow hop forward in the facing direction.
+                let imp = f.ground_normal * JUMP_UP + v2(f.facing * JUMP_FWD, 0.0);
+                f.vel += imp;
                 f.grounded = false;
+                f.jump_t = BACKFLIP_WINDOW;
+                f.jump_impulse = imp;
                 self.events.push(Event::Jump { frog: f.id });
             }
         } else {
@@ -950,8 +1073,9 @@ impl Sim {
             }
         };
         put(self.tick);
-        put(self.scores[0] as u64);
-        put(self.scores[1] as u64);
+        for s in &self.scores {
+            put(*s as u64);
+        }
         for f in &self.frogs {
             put(f.id as u64);
             put(f.pos.x.to_bits() as u64);
