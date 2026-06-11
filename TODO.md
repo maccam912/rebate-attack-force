@@ -1,42 +1,35 @@
-# TODO / pickup notes (as of 2026-06-10)
+# TODO / pickup notes (as of 2026-06-11)
 
 Status: workspace builds, 23 tests green, browser smoke verified (lobby →
-mode switch → ready → round running). Nothing committed yet beyond the
-existing two commits.
+ready → round → walking with legs). Nothing committed yet.
 
-## Done 2026-06-10 (this session)
+## Done (compressed log)
 
-- **Tongue phasing fix** — unwrap is now winding-based (fold stores which side
-  the frog was on; it only unwinds when the frog crosses back), and the wrap
-  raycast samples along the frog's last step so thin islands can't tunnel
-  between ticks at high swing speed. Regression test:
-  `rope_fold_holds_until_frog_swings_back`.
-- **Jump 90° glitch fix** — the velocity-stretch pose in `view.rs` only kicks
-  in above swing speeds (430, above hop speed) and rotation/scale are eased
-  over time instead of snapping.
-- **Enter-key jump** — Enter (and Space) = jump. Single tap: shallow hop
-  forward in the facing direction. Double tap within 0.25 s: converts the hop
-  into a backflip (mostly up, slightly back). Test:
-  `jump_hops_forward_and_double_tap_backflips`.
-- **Lobby + game-mode select** — rooms start in `Phase::Lobby`; the panel
-  shows mode + roster, `[M]` toggles Teams ↔ Free-for-all (any player),
-  `[R]` readies up; the match starts when everyone is ready and returns to
-  the lobby after the end screen. FFA gives each player their own
-  team/color/stash (sim generalized to N teams: scores/inventory are Vecs,
-  8-color palette cycling in the client). Protocol bumped to v2
-  (`Ready`/`SetMode`, `mode` + Vec scores in snapshots, `ready` in roster).
-  Tests: `lobby_gates_match_and_mode_select_reassigns_teams` (sim),
-  `lobby_waits_for_all_ready_and_any_player_switches_mode` (ws).
-- `scripts/drive_keys.mjs` — CDP helper to send key presses to a running tab
-  (used to smoke the lobby flow headlessly).
+- 2026-06-10: tongue phasing fix (winding unwrap + swept wrap raycast),
+  jump 90° glitch fix (eased velocity pose), Enter jump (tap hop / double-tap
+  backflip), lobby with Teams ↔ FFA mode select (N-team sim, protocol v2).
+- 2026-06-11: procedural spider-walk legs (client `legs.rs`: feet raycast-plant
+  on terrain, stay put until out of reach, lifted step + grass footstep sound,
+  dangle when airborne, two-bone IK gizmo render). Sound pass: UI clicks
+  (weapon select / lobby M / lobby R), crate-spawn pop layer, synthesized frog
+  croaks (`scripts/gen_croaks.py` → ambient ribbits per frog, jump "hup",
+  pickup trill, death croak). `scripts/drive_hold.mjs` (CDP key-hold + console
+  capture). Fixed clippy `approx_constant` in sim terrain.
 
 ## Next steps
 
-- Playtest the tongue fix + new jump feel with a human (numbers may want
-  tuning: `JUMP_UP/JUMP_FWD/BACKFLIP_*` in sim `game.rs`).
-- Procedural legs / pose animation, squash-on-impact (dossier feel item #9)
-- Multi-target camera
-- Lobby polish: per-player colors in the roster list, maybe clickable buttons
-- wasm-opt to shrink the ~9.5 MB gzipped wasm
-- Bevy 0.18 migration (currently pinned to 0.17)
-- Initial commit still pending ("say the word")
+- Playtest feel: jump/backflip constants (`JUMP_UP/JUMP_FWD/BACKFLIP_*` in sim
+  `game.rs`), tongue behavior, and now leg tuning (`REACH/STEP_TRIGGER/
+  STEP_TIME` etc. in client `legs.rs`) + sound mix levels.
+- Squash-on-impact body pose (dossier feel item #9 — legs half done, body
+  squash still missing).
+- Audio polish: master volume / mute key; stereo pan by world position
+  (currently only distance attenuation on footsteps + ambient croaks);
+  consider recorded ribbits to replace the synthesized croaks if they feel
+  too retro. Note: homebrew ffmpeg lacks libvorbis — gen_croaks converts via
+  the built-in `vorbis` encoder, which requires `-ac 2 -strict experimental`.
+- Multi-target camera.
+- Lobby polish: per-player colors in the roster list, maybe clickable buttons.
+- wasm-opt to shrink the ~9.5 MB gzipped wasm.
+- Bevy 0.18 migration (currently pinned to 0.17).
+- Initial commit still pending ("say the word").

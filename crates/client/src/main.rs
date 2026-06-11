@@ -3,6 +3,7 @@
 
 mod hud;
 mod input;
+mod legs;
 mod net;
 mod sfx;
 mod view;
@@ -34,6 +35,8 @@ fn main() {
         .init_resource::<input::Selected>()
         .init_resource::<input::SendTimer>()
         .init_resource::<hud::Banner>()
+        .init_resource::<legs::LegRigs>()
+        .init_resource::<sfx::CroakTimers>()
         .add_systems(
             Startup,
             (setup_camera, view::setup_world, hud::setup_hud, sfx::load_sfx, net::connect),
@@ -47,6 +50,7 @@ fn main() {
                     view::repaint_terrain,
                     view::sync_world,
                     view::draw_ropes,
+                    legs::update_legs,
                     view::spawn_fx,
                     view::update_fx,
                     view::camera_follow,
@@ -54,6 +58,7 @@ fn main() {
                     input::lobby_keys,
                     hud::update_hud,
                     sfx::play_events,
+                    sfx::ambient_croaks,
                 ),
                 clear_events,
             )

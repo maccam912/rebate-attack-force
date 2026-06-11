@@ -110,7 +110,7 @@ impl Terrain {
         }
         let chamfer = |d: &mut Vec<f32>| {
             const ORTH: f32 = 1.0;
-            const DIAG: f32 = 1.4142135;
+            const DIAG: f32 = std::f32::consts::SQRT_2;
             // forward
             for y in 0..h {
                 for x in 0..w {

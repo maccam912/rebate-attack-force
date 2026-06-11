@@ -2,6 +2,7 @@
 //! No prediction: the server owns the truth, we just send intent.
 
 use crate::net::{send_msg, NetSocket, NetState};
+use crate::sfx::Sfx;
 use crate::view::w2b;
 use bevy::prelude::*;
 use protocol::ClientMsg;
@@ -12,9 +13,11 @@ use sim::game::{
 
 /// Lobby controls: M switches game mode, R toggles ready.
 pub fn lobby_keys(
+    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     net: Res<NetState>,
     socket: Option<NonSendMut<NetSocket>>,
+    mut sfx: ResMut<Sfx>,
 ) {
     let Some(mut socket) = socket else { return };
     if !net.connected {
@@ -30,6 +33,7 @@ pub fn lobby_keys(
             Mode::Ffa => Mode::Teams,
         };
         send_msg(&mut socket, &ClientMsg::SetMode(next));
+        sfx.play(&mut commands, "ui_switch", 0.6);
     }
     if keys.just_pressed(KeyCode::KeyR) {
         let ready = net
@@ -38,6 +42,7 @@ pub fn lobby_keys(
             .map(|p| p.ready)
             .unwrap_or(false);
         send_msg(&mut socket, &ClientMsg::Ready(!ready));
+        sfx.play(&mut commands, "ui_confirm", 0.6);
     }
 }
 
@@ -49,6 +54,7 @@ pub struct SendTimer(pub f32);
 
 #[allow(clippy::too_many_arguments)]
 pub fn gather_and_send(
+    mut commands: Commands,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -56,6 +62,7 @@ pub fn gather_and_send(
     mut timer: ResMut<SendTimer>,
     net: Res<NetState>,
     socket: Option<NonSendMut<NetSocket>>,
+    mut sfx: ResMut<Sfx>,
     windows: Query<&Window>,
     camera: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
 ) {
@@ -71,6 +78,7 @@ pub fn gather_and_send(
     ] {
         if keys.just_pressed(key) {
             sel.0 = idx.min(NUM_WEAPONS as u8 - 1);
+            sfx.play(&mut commands, "ui_click", 0.5);
         }
     }
 

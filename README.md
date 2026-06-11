@@ -74,3 +74,6 @@ message used by the e2e test; `SEED=n` fixes the terrain; `PORT`, `CLIENT_DIST`.
 Sound effects from [Kenney](https://kenney.nl)'s CC0 game asset packs
 (Impact Sounds, Sci-Fi Sounds, Interface Sounds, Foley Sounds, Retro Sounds,
 Music Jingles). Thanks Kenney!
+
+Frog croaks (`assets/audio/croak_*.ogg`) are synthesized by
+`scripts/gen_croaks.py` (regenerate with python3 + ffmpeg).
