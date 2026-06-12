@@ -10,7 +10,6 @@ RUN rustup target add wasm32-unknown-unknown \
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY assets ./assets
 
 RUN cargo build --locked --release -p server \
     && cd crates/client \

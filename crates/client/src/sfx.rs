@@ -68,6 +68,7 @@ pub fn load_sfx(mut commands: Commands, assets: Res<AssetServer>) {
     load("croak", &["croak_0", "croak_1", "croak_2", "croak_3"]);
     load("croak_jump", &["croak_jump_0", "croak_jump_1"]);
     load("croak_pickup", &["croak_pickup"]);
+    load("croak_ouch", &["croak_ouch_0", "croak_ouch_1"]);
     load("croak_death", &["croak_death"]);
     commands.insert_resource(Sfx { sets, counter: 0 });
 }
@@ -92,6 +93,8 @@ pub fn play_events(mut commands: Commands, net: Res<NetState>, mut sfx: ResMut<S
             }
             SimEvent::Splash { .. } => picks.push(("splash", 0.7)),
             SimEvent::Damage { .. } => picks.push(("hurt", 0.45)),
+            // hard landing: pained yelp on top of the impact thud
+            SimEvent::Ouch { .. } => picks.push(("croak_ouch", 0.65)),
             SimEvent::Fire { weapon, .. } => picks.push((
                 match weapon {
                     Weapon::Bazooka => "fire_bazooka",

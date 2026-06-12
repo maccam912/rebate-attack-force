@@ -1,6 +1,7 @@
 //! World rendering: terrain texture, frogs, crates, projectiles, rope, fx.
 
 use crate::net::{ClientTerrain, NetState};
+use crate::typography::{self, size};
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -25,6 +26,49 @@ pub const TEAM_COLORS: [Color; 8] = [
 
 pub fn team_color(team: u8) -> Color {
     TEAM_COLORS[team as usize % TEAM_COLORS.len()]
+}
+
+/// How long a frog must fall freely (no tongue, no ground) before it tips
+/// over into the head-down dive pose.
+pub const DIVE_DELAY: f32 = 1.0;
+/// How long the post-fall ragdoll flop lasts.
+pub const RAGDOLL_TIME: f32 = 1.1;
+
+/// The tongue gets its own gizmo group so it can be drawn fat.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct TongueGizmos;
+
+/// Client-side pose state derived from snapshots/events: free-fall timers
+/// (dive pose) and post-fall ragdoll timers (body wobble + leg flop).
+#[derive(Resource, Default)]
+pub struct FrogPose {
+    /// Continuous free-fall time (alive, airborne, no rope) per frog.
+    pub air: HashMap<u8, f32>,
+    /// Ragdoll time left after a hard landing, per frog.
+    pub ragdoll: HashMap<u8, f32>,
+}
+
+pub fn update_pose(time: Res<Time>, net: Res<NetState>, mut pose: ResMut<FrogPose>) {
+    let dt = time.delta_secs();
+    for ev in &net.events {
+        if let SimEvent::Ouch { frog } = ev {
+            pose.ragdoll.insert(*frog, RAGDOLL_TIME);
+        }
+    }
+    pose.ragdoll.retain(|_, t| {
+        *t -= dt;
+        *t > 0.0
+    });
+    let Some(snap) = net.latest() else { return };
+    for f in &snap.frogs {
+        let t = pose.air.entry(f.id).or_insert(0.0);
+        if f.alive && !f.grounded && f.rope.is_none() {
+            *t += dt;
+        } else {
+            *t = 0.0;
+        }
+    }
+    pose.air.retain(|id, _| snap.frogs.iter().any(|f| f.id == *id));
 }
 
 /// sim (y-down) → bevy (y-up, centered)
@@ -263,6 +307,7 @@ pub fn sync_world(
     time: Res<Time>,
     net: Res<NetState>,
     tex: Res<Textures>,
+    pose: Res<FrogPose>,
     mut vis: ResMut<VisIndex>,
     mut frog_q: Query<(&FrogVis, &mut Transform, &mut Visibility, &mut Sprite)>,
     mut crate_q: Query<(&CrateVis, &mut Transform), (Without<FrogVis>, Without<ProjVis>)>,
@@ -307,12 +352,20 @@ pub fn sync_world(
         });
         if let Ok((_, mut tr, mut vis_, mut sprite)) = frog_q.get_mut(entity) {
             tr.translation = w2b(pos, 10.0);
-            // velocity stretch: only at swing speeds (well above jump speed,
-            // so a plain hop never tips the frog) and eased over time so the
-            // pose never snaps.
+            // velocity pose: swinging tilts along the arc; a free fall only
+            // tips into the head-down dive after DIVE_DELAY of tongue-less
+            // falling; a hard landing wobbles the body while the legs flop.
+            // Eased over time so the pose never snaps.
             let speed = fb.vel.length();
             let dir = Vec2::new(fb.vel.x, -fb.vel.y).normalize_or_zero();
-            let (target_rot, target_scale) = if speed > 430.0 && dir != Vec2::ZERO {
+            let falling = pose.air.get(&fb.id).copied().unwrap_or(0.0);
+            let (target_rot, target_scale) = if let Some(t) = pose.ragdoll.get(&fb.id) {
+                let wob = (t * 26.0).sin() * 0.6 * (t / RAGDOLL_TIME);
+                (Quat::from_rotation_z(wob), Vec3::ONE)
+            } else if speed > 430.0
+                && dir != Vec2::ZERO
+                && (fb.rope.is_some() || falling > DIVE_DELAY)
+            {
                 let s = 1.0 + (speed / 2400.0).min(0.22);
                 (
                     Quat::from_rotation_z(dir.y.atan2(dir.x)),
@@ -376,10 +429,7 @@ pub fn sync_world(
                 continue;
             }
             let hp = fb.hp.max(0.0).round() as i32;
-            let new = format!("{hp}");
-            if text.0 != new {
-                text.0 = new;
-            }
+            typography::set_world(&mut text, format!("{hp}"));
             color.0 = if fb.hp > 60.0 {
                 Color::WHITE
             } else if fb.hp > 30.0 {
@@ -398,9 +448,7 @@ pub fn sync_world(
                 .find(|p| p.id == fb.id)
                 .map(|p| p.name.as_str())
                 .unwrap_or("frog");
-            if text.0 != name {
-                text.0 = name.to_string();
-            }
+            typography::set_world(&mut text, name);
         }
     }
     // despawn frogs that left
@@ -546,16 +594,12 @@ fn spawn_frog(
                 ));
             }
             p.spawn((
-                Text2d::new("frog"),
-                TextFont::from_font_size(13.0),
-                TextColor(color),
+                typography::world("frog", size::LABEL, color),
                 Transform::from_xyz(0.0, 36.0, 0.5),
                 NameTag,
             ));
             p.spawn((
-                Text2d::new("100"),
-                TextFont::from_font_size(12.0),
-                TextColor(Color::WHITE),
+                typography::world("100", size::SMALL, Color::WHITE),
                 Transform::from_xyz(0.0, 22.0, 0.5),
                 HpTag,
             ));
@@ -586,8 +630,8 @@ fn spawn_frog(
         .id()
 }
 
-/// Tongue/rope rendering with gizmo polylines.
-pub fn draw_ropes(net: Res<NetState>, mut gizmos: Gizmos) {
+/// Tongue/rope rendering: fat gizmo polylines (width set on TongueGizmos).
+pub fn draw_ropes(net: Res<NetState>, mut gizmos: Gizmos<TongueGizmos>) {
     let Some((_, next, _)) = net.frame() else {
         return;
     };
@@ -606,7 +650,7 @@ pub fn draw_ropes(net: Res<NetState>, mut gizmos: Gizmos) {
                 );
             }
             // tongue tip blob
-            gizmos.circle_2d(pts[0].truncate(), 3.0, Color::srgb(0.98, 0.45, 0.5));
+            gizmos.circle_2d(pts[0].truncate(), 4.5, Color::srgb(0.98, 0.45, 0.5));
         }
     }
 }

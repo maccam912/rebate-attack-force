@@ -58,7 +58,7 @@ to the same pod.
 | `crates/sim` | deterministic 120 Hz game core: SDF terrain, swept circle physics, tongue/rope with terrain folds, weapons, rules. No engine deps; a whole match runs in a unit test. |
 | `crates/protocol` | bincode wire messages (client ⇄ server) |
 | `crates/server` | axum WebSocket server; one tokio task per room (party code), authoritative sim, ~30 Hz snapshots. No client prediction — clients interpolate. |
-| `crates/client` | Bevy 0.17 client (native + wasm via trunk), renders snapshots, streams inputs |
+| `crates/client` | Bevy 0.18 client (native + wasm via trunk), renders snapshots, streams inputs |
 
 ## Tests
 
@@ -75,5 +75,5 @@ Sound effects from [Kenney](https://kenney.nl)'s CC0 game asset packs
 (Impact Sounds, Sci-Fi Sounds, Interface Sounds, Foley Sounds, Retro Sounds,
 Music Jingles). Thanks Kenney!
 
-Frog croaks (`assets/audio/croak_*.ogg`) are synthesized by
+Frog croaks (`crates/client/assets/audio/croak_*.ogg`) are synthesized by
 `scripts/gen_croaks.py` (regenerate with python3 + ffmpeg).

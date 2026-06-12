@@ -1,5 +1,5 @@
 use crate::math::{v2, Vec2};
-use crate::rng::hash2;
+use crate::rng::{hash2, Pcg32};
 
 /// World size in pixels. Sim coordinates are y-down: y=0 is the sky,
 /// y=HEIGHT is below the water line.
@@ -50,10 +50,72 @@ fn fbm(x: f32, y: f32, seed: u64, octaves: u32) -> f32 {
     sum
 }
 
+/// An elliptical chunk of rock with a noisy edge (floating island/platform).
+struct Blob {
+    c: Vec2,
+    rx: f32,
+    ry: f32,
+}
+
+impl Blob {
+    fn contains(&self, p: Vec2, wobble: f32) -> bool {
+        let dx = (p.x - self.c.x) / self.rx;
+        let dy = (p.y - self.c.y) / self.ry;
+        dx * dx + dy * dy < 0.8 + wobble
+    }
+}
+
 impl Terrain {
-    /// Deterministic island-style terrain: a rolling main landmass above the
-    /// water line, noise caves inside it, and a few floating chunks.
+    /// Deterministic island-style terrain: a rolling main landmass with open
+    /// water past both ends, pits and winding tunnels cut into it, noise
+    /// caves, and a scatter of floating islands and small platforms in the
+    /// sky to swing from.
     pub fn generate(seed: u64) -> Terrain {
+        let mut rng = Pcg32::new(seed ^ 0x7E44A1);
+
+        // Floating islands: big chunks you can stand on and tongue onto.
+        let isles: Vec<Blob> = (0..4 + rng.below(3))
+            .map(|_| Blob {
+                c: v2(
+                    rng.range(WIDTH * 0.16, WIDTH * 0.84),
+                    rng.range(HEIGHT * 0.10, HEIGHT * 0.40),
+                ),
+                rx: rng.range(65.0, 150.0),
+                ry: rng.range(26.0, 55.0),
+            })
+            .collect();
+        // Small slab platforms: stepping stones / tongue anchors.
+        let plats: Vec<Blob> = (0..8 + rng.below(5))
+            .map(|_| Blob {
+                c: v2(
+                    rng.range(WIDTH * 0.10, WIDTH * 0.90),
+                    rng.range(HEIGHT * 0.12, HEIGHT * 0.58),
+                ),
+                rx: rng.range(28.0, 70.0),
+                ry: rng.range(7.0, 14.0),
+            })
+            .collect();
+        // Pits: gaussian-ish bites taken out of the surface line.
+        let pits: Vec<(f32, f32, f32)> = (0..2 + rng.below(2))
+            .map(|_| {
+                (
+                    rng.range(WIDTH * 0.22, WIDTH * 0.78), // center x
+                    rng.range(45.0, 95.0),                 // half-width
+                    rng.range(180.0, 340.0),               // depth
+                )
+            })
+            .collect();
+        // Tunnels: wandering horizontal worms through the landmass.
+        let tunnels: Vec<(f32, f32, f32)> = (0..2 + rng.below(2))
+            .map(|_| {
+                (
+                    rng.range(HEIGHT * 0.62, HEIGHT * 0.86), // base y
+                    rng.range(0.0, 90.0),                    // noise phase
+                    rng.range(15.0, 24.0),                   // radius
+                )
+            })
+            .collect();
+
         let mut solid = vec![false; GRID_W * GRID_H];
         for gy in 0..GRID_H {
             for gx in 0..GRID_W {
@@ -63,9 +125,24 @@ impl Terrain {
                     continue; // open water below
                 }
                 // Main surface line: rolling hills around 55% height.
-                let surf = HEIGHT * 0.52
+                let mut surf = HEIGHT * 0.52
                     + (fbm(x / 380.0, 7.3, seed, 4) - 0.5) * 420.0
                     + (fbm(x / 90.0, 3.1, seed ^ 0xABCD, 3) - 0.5) * 90.0;
+                // Pits gouge the surface downward.
+                for &(px, pw, pd) in &pits {
+                    let t = ((x - px) / pw) * ((x - px) / pw);
+                    if t < 1.0 {
+                        let fall = 1.0 - t;
+                        surf += pd * fall * fall;
+                    }
+                }
+                // Island ends: sink the landmass below the water line so the
+                // map is flanked by open water you can fall into.
+                let m = 260.0;
+                let ex = (x.min(WIDTH - x) / m).clamp(0.0, 1.0);
+                let env = ex * ex * (3.0 - 2.0 * ex);
+                surf += (1.0 - env) * 800.0;
+
                 let mut s = y > surf;
                 if s {
                     // Caves: carve where cave noise is high, more likely deeper.
@@ -74,11 +151,20 @@ impl Terrain {
                     if cave > 0.62 - (depth.min(1.0) * 0.08) {
                         s = false;
                     }
+                    // Tunnels follow a noisy path; anything within the worm's
+                    // radius is hollowed out.
+                    for &(ty, phase, tr) in &tunnels {
+                        let path =
+                            ty + (fbm(x / 310.0, phase, seed ^ 0x70BE5, 3) - 0.5) * 260.0;
+                        if (y - path).abs() < tr {
+                            s = false;
+                        }
+                    }
                 }
-                // Floating chunks in the sky for rope anchors.
+                // Floating islands and platforms, with noise-roughened edges.
                 if !s {
-                    let blob = fbm(x / 220.0, y / 130.0, seed ^ 0xF10A7, 4);
-                    if blob > 0.72 && y < HEIGHT * 0.45 && y > HEIGHT * 0.08 {
+                    let wob = (fbm(x / 55.0, y / 55.0, seed ^ 0xB10B, 3) - 0.5) * 0.55;
+                    if isles.iter().chain(&plats).any(|b| b.contains(v2(x, y), wob)) {
                         s = true;
                     }
                 }

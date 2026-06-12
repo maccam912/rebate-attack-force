@@ -4,15 +4,22 @@
 //! and *plants* there in world space — the body slides around above it —
 //! until the body drags the hip out of reach, at which point the foot takes
 //! a quick lifted step to a fresh spot ahead of the motion. Airborne feet
-//! dangle under the body and re-plant on landing.
+//! ragdoll: verlet points under gravity tethered to the hip, so they trail
+//! and flop while swinging or falling, and thrash for a moment after a
+//! hard landing (FrogPose ragdoll timers).
 
 use crate::net::{ClientTerrain, NetState};
 use crate::sfx::Sfx;
-use crate::view::{team_color, w2b};
+use crate::view::{team_color, w2b, FrogPose};
 use bevy::prelude::*;
 use sim::game::FROG_R;
 use sim::rng::Pcg32;
+use sim::Terrain;
 use std::collections::HashMap;
+
+/// Legs draw in their own gizmo group, configured as fat as the tongue.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct LegGizmos;
 
 /// Hip x-offsets from the body center (sim units); two legs per side.
 const HIP_X: [f32; 4] = [-10.0, -4.0, 4.0, 10.0];
@@ -26,11 +33,38 @@ const PROBE: f32 = FROG_R + 26.0; // how far below the hip we look for ground
 
 struct Foot {
     pos: sim::Vec2,
+    /// previous position for verlet integration while ragdolling
+    prev: sim::Vec2,
     from: sim::Vec2,
     target: sim::Vec2,
     /// step progress; >= 1 means planted at `target`
     t: f32,
     grounded: bool,
+}
+
+/// Ragdoll integration: gravity + damping, tethered to the hip at full leg
+/// length, kept out of the terrain. `twitch` adds random thrash kicks.
+fn flop(foot: &mut Foot, hip: sim::Vec2, twitch: f32, rng: &mut Pcg32, terrain: &Terrain, dt: f32) {
+    let dt = dt.min(1.0 / 30.0);
+    let mut next = foot.pos + (foot.pos - foot.prev) * 0.985 + sim::v2(0.0, 1500.0 * dt * dt);
+    if twitch > 0.0 {
+        next += sim::v2(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)) * (twitch * dt);
+    }
+    foot.prev = foot.pos;
+    foot.pos = next;
+    let max_d = UPPER + LOWER - 1.0;
+    let off = foot.pos - hip;
+    let d = off.length();
+    if d > max_d {
+        foot.pos = hip + off * (max_d / d);
+    }
+    let sd = terrain.sample(foot.pos);
+    if sd < 1.5 {
+        foot.pos += terrain.normal(foot.pos) * (1.5 - sd).min(4.0);
+    }
+    foot.grounded = false;
+    foot.t = 1.0;
+    foot.target = foot.pos;
 }
 
 struct Rig {
@@ -52,14 +86,16 @@ impl Default for LegRigs {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update_legs(
     mut commands: Commands,
     time: Res<Time>,
     net: Res<NetState>,
     ct: Res<ClientTerrain>,
+    pose: Res<FrogPose>,
     mut rigs: ResMut<LegRigs>,
     mut sfx: ResMut<Sfx>,
-    mut gizmos: Gizmos,
+    mut gizmos: Gizmos<LegGizmos>,
 ) {
     let Some((prev, next, alpha)) = net.frame() else {
         return;
@@ -105,6 +141,7 @@ pub fn update_legs(
                     let p = body + sim::v2(ox, FROG_R);
                     Foot {
                         pos: p,
+                        prev: p,
                         from: p,
                         target: p,
                         t: 1.0,
@@ -117,6 +154,10 @@ pub fn update_legs(
         // feet step slightly ahead of where the body is going
         let lead = (fb.vel.x * 0.085).clamp(-12.0, 12.0);
 
+        // ragdoll after a hard landing overrides planting even on the ground
+        let ragdolling = pose.ragdoll.contains_key(&fb.id);
+        let limp = ragdolling || !fb.grounded;
+
         // which legs are mid-step this frame (gait: neighbors wait their turn)
         let stepping: Vec<bool> = rig.feet.iter().map(|f| f.t < 1.0).collect();
 
@@ -124,7 +165,11 @@ pub fn update_legs(
             let hip = body + sim::v2(HIP_X[i] * 0.55, FROG_R * 0.45);
             // probe for ground below the desired foothold
             let probe_from = body + sim::v2(HIP_X[i] + lead, -2.0);
-            let hit = terrain.raycast(probe_from, sim::v2(0.0, 1.0), PROBE);
+            let hit = if limp {
+                None
+            } else {
+                terrain.raycast(probe_from, sim::v2(0.0, 1.0), PROBE)
+            };
 
             match hit {
                 Some(ground) => {
@@ -145,15 +190,10 @@ pub fn update_legs(
                     }
                 }
                 None => {
-                    // airborne: dangle below/behind the hip, trailing velocity
-                    foot.grounded = false;
-                    let dangle =
-                        hip + sim::v2(0.0, 9.0) - fb.vel.clamp_length(140.0) * 0.04;
-                    foot.target = dangle;
-                    foot.from = foot.pos;
-                    foot.t = 1.0;
-                    let k = 1.0 - (-14.0 * dt).exp();
-                    foot.pos = foot.pos.lerp(dangle, k);
+                    // airborne (or stunned): legs go limp and flop around;
+                    // a fresh ouch adds panicked thrashing on top.
+                    let twitch = if ragdolling { 240.0 } else { 0.0 };
+                    flop(foot, hip, twitch, &mut rigs.rng, terrain, dt);
                 }
             }
 
@@ -172,6 +212,11 @@ pub fn update_legs(
                         sfx.play(&mut commands, "step", vol);
                     }
                 }
+            }
+            if foot.grounded {
+                // keep the verlet state in sync while planted so the leg
+                // starts from rest when it next goes limp
+                foot.prev = foot.pos;
             }
 
             // draw: two-bone IK, knee bent up and outward

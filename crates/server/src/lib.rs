@@ -222,7 +222,6 @@ fn build_snapshot(game: &Sim, events: Vec<Event>) -> Snapshot {
                 aim: f.aim,
                 facing: f.facing,
                 grounded: f.grounded,
-                armed: f.armed,
                 charge: f.charge,
                 rope: f.rope.as_ref().map(|r| r.anchors.clone()),
             })
@@ -372,6 +371,29 @@ fn sanitize_code(s: &str) -> String {
     }
 }
 
+/// Cache policy for redeploys: trunk content-hashes the js/wasm bundles, so
+/// those can be cached forever; everything else (index.html, assets/) must
+/// revalidate so a new image is picked up immediately (304s keep it cheap).
+async fn cache_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let immutable = {
+        let p = req.uri().path();
+        p.ends_with(".wasm") || p.ends_with(".js")
+    };
+    let mut res = next.run(req).await;
+    res.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static(if immutable {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        }),
+    );
+    res
+}
+
 pub fn build_router(state: Arc<AppState>, dist_dir: &str) -> Router {
     let index = format!("{dist_dir}/index.html");
     let files = ServeDir::new(dist_dir).fallback(ServeFile::new(index));
@@ -381,6 +403,7 @@ pub fn build_router(state: Arc<AppState>, dist_dir: &str) -> Router {
         .fallback_service(
             tower::ServiceBuilder::new()
                 .layer(tower_http::compression::CompressionLayer::new())
+                .layer(axum::middleware::from_fn(cache_headers))
                 .service(files),
         )
         .with_state(state)

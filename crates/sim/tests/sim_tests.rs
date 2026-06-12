@@ -294,15 +294,13 @@ fn rope_fold_holds_until_frog_swings_back() {
 // ---------- rules ----------
 
 #[test]
-fn crate_pickup_arms_frog_and_stocks_team_inventory() {
+fn crate_pickup_stocks_team_inventory() {
     let (mut s, ids) = round_sim(1);
     let f = s.frog(ids[0]).unwrap();
     let team = f.team as usize;
-    assert!(!f.armed);
+    assert_eq!(s.inventory[team].iter().sum::<u8>(), 0);
     s.debug_drop_crate(f.pos);
     step_frozen(&mut s, 2);
-    let f = s.frog(ids[0]).unwrap();
-    assert!(f.armed, "picked up crate → armed");
     assert_eq!(s.inventory[team].iter().sum::<u8>(), 1);
     assert!(s
         .events
@@ -311,7 +309,7 @@ fn crate_pickup_arms_frog_and_stocks_team_inventory() {
 }
 
 #[test]
-fn firing_consumes_weapon_and_one_shot_per_round() {
+fn firing_consumes_weapon_until_stash_is_empty() {
     let (mut s, ids) = round_sim(1);
     let id = ids[0];
     let team = s.frog(id).unwrap().team as usize;
@@ -342,14 +340,12 @@ fn firing_consumes_weapon_and_one_shot_per_round() {
     step_frozen(&mut s, 2);
     assert_eq!(s.projectiles.len(), 1, "projectile spawned");
     assert_eq!(s.inventory[team][widx as usize], 0, "weapon consumed");
-    let f = s.frog(id).unwrap();
-    assert!(!f.armed, "one shot per round");
     // owner grace: it must not have detonated on the shooter immediately
     assert!(s
         .events
         .iter()
         .all(|e| !matches!(e, Event::Explosion { .. })));
-    // try to fire again without a crate: nothing happens
+    // try to fire again with an empty stash: nothing happens
     s.set_input(
         id,
         Input {
@@ -368,11 +364,56 @@ fn firing_consumes_weapon_and_one_shot_per_round() {
         },
     );
     step_frozen(&mut s, 2);
-    assert_eq!(s.projectiles.len(), 1, "no second shot while unarmed");
+    assert_eq!(s.projectiles.len(), 1, "no second shot from an empty stash");
 }
 
 #[test]
-fn cannot_fire_without_crate() {
+fn leftover_stash_fires_next_round_without_a_crate() {
+    let (mut s, ids) = round_sim(1);
+    let id = ids[0];
+    let team = s.frog(id).unwrap().team as usize;
+    // stock a weapon this round but don't use it
+    s.debug_drop_crate(s.frog(id).unwrap().pos);
+    step_frozen(&mut s, 2);
+    let widx = (0..NUM_WEAPONS)
+        .find(|w| s.inventory[team][*w] > 0)
+        .unwrap() as u8;
+    // round end → break → pre → next round
+    s.phase_t = ROUND_TIME + 1.0;
+    s.step();
+    s.phase_t = BREAK_TIME + 1.0;
+    s.step();
+    s.phase_t = PRE_TIME + 1.0;
+    s.step();
+    assert_eq!(s.phase, Phase::Round);
+    assert_eq!(s.inventory[team][widx as usize], 1, "stash persisted");
+    step_frozen(&mut s, 120); // settle on the ground
+    // fire straight away — no crate picked up this round
+    let aim = v2(0.0, -1.0);
+    s.set_input(
+        id,
+        Input {
+            buttons: BTN_FIRE,
+            aim,
+            sel: widx,
+        },
+    );
+    step_frozen(&mut s, 30);
+    s.set_input(
+        id,
+        Input {
+            buttons: 0,
+            aim,
+            sel: widx,
+        },
+    );
+    step_frozen(&mut s, 2);
+    assert_eq!(s.projectiles.len(), 1, "fired from leftover stash");
+    assert_eq!(s.inventory[team][widx as usize], 0);
+}
+
+#[test]
+fn cannot_fire_with_empty_stash() {
     let (mut s, ids) = round_sim(1);
     let id = ids[0];
     s.set_input(id, input(BTN_FIRE, v2(0.0, -1.0)));
@@ -427,6 +468,41 @@ fn friendly_fire_scores_nothing() {
     }
     assert!(!s.frog(c).unwrap().alive);
     assert_eq!(s.scores, [0, 0], "no score for friendly fire");
+}
+
+#[test]
+fn falling_off_the_island_side_drowns() {
+    let (mut s, ids) = round_sim(1);
+    let id = ids[0];
+    {
+        let f = s.frogs.iter_mut().find(|f| f.id == id).unwrap();
+        // off the west end of the island, in open air: nothing but water below
+        f.pos = v2(20.0, 300.0);
+        f.vel = v2(-40.0, 0.0);
+        f.rope = None;
+    }
+    step_frozen(&mut s, 600); // 5 s of falling
+    assert!(!s.frog(id).unwrap().alive, "fell past the side into the sea");
+    assert!(s
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::Death { cause: DeathCause::Drown, .. })));
+}
+
+#[test]
+fn hard_landing_damages_and_says_ouch() {
+    let (mut s, ids) = round_sim(1);
+    let id = ids[0];
+    {
+        let f = s.frogs.iter_mut().find(|f| f.id == id).unwrap();
+        // slam straight down into the ground it was standing on
+        f.pos.y -= 6.0;
+        f.vel = v2(0.0, 900.0);
+    }
+    step_frozen(&mut s, 10);
+    let f = s.frog(id).unwrap();
+    assert!(f.hp < 100.0, "fall damage applied, hp {}", f.hp);
+    assert!(s.events.iter().any(|e| matches!(e, Event::Ouch { .. })));
 }
 
 #[test]

@@ -2,6 +2,7 @@
 
 use crate::input::Selected;
 use crate::net::NetState;
+use crate::typography::{self, size};
 use crate::view::{team_color, TEAM_COLORS};
 use bevy::prelude::*;
 use protocol::PlayerMeta;
@@ -23,6 +24,8 @@ pub struct ConnText;
 pub struct LobbyPanel;
 #[derive(Component)]
 pub struct LobbyText;
+#[derive(Component)]
+pub struct HealthPanel;
 
 #[derive(Resource, Default)]
 pub struct Banner {
@@ -57,16 +60,14 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
             p.spawn((
                 Node {
                     padding: UiRect::axes(Val::Px(14.0), Val::Px(4.0)),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
                 BackgroundColor(PANEL),
-                BorderRadius::all(Val::Px(8.0)),
             ))
             .with_children(|p| {
                 p.spawn((
-                    Text::new("--"),
-                    TextFont::from_font_size(26.0),
-                    TextColor(Color::WHITE),
+                    typography::ui("--", size::PHASE, Color::WHITE),
                     PhaseText,
                 ));
             });
@@ -74,27 +75,19 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
                 Node {
                     padding: UiRect::axes(Val::Px(10.0), Val::Px(3.0)),
                     column_gap: Val::Px(8.0),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
                 BackgroundColor(PANEL),
-                BorderRadius::all(Val::Px(8.0)),
             ))
             .with_children(|p| {
                 p.spawn((
-                    Text::new("GREEN 0"),
-                    TextFont::from_font_size(16.0),
-                    TextColor(TEAM_COLORS[0]),
+                    typography::ui("GREEN 0", size::SCORE, TEAM_COLORS[0]),
                     ScoreText(0),
                 ));
+                p.spawn(typography::ui(":", size::SCORE, Color::WHITE));
                 p.spawn((
-                    Text::new(":"),
-                    TextFont::from_font_size(16.0),
-                    TextColor(Color::WHITE),
-                ));
-                p.spawn((
-                    Text::new("0 PINK"),
-                    TextFont::from_font_size(16.0),
-                    TextColor(TEAM_COLORS[1]),
+                    typography::ui("0 PINK", size::SCORE, TEAM_COLORS[1]),
                     ScoreText(1),
                 ));
             });
@@ -114,42 +107,57 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
         })
         .with_children(|p| {
             p.spawn((
-                Text::new(""),
-                TextFont::from_font_size(15.0),
-                TextColor(Color::srgb(1.0, 0.9, 0.4)),
+                typography::ui("", size::STATUS, Color::srgb(1.0, 0.9, 0.4)),
                 StatusText,
             ));
-            p.spawn((
-                Node {
-                    column_gap: Val::Px(6.0),
-                    ..default()
-                },
-            ))
-            .with_children(|p| {
-                for i in 0..NUM_WEAPONS as u8 {
-                    p.spawn((
-                        Node {
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
-                            ..default()
-                        },
-                        BackgroundColor(PANEL),
-                        BorderRadius::all(Val::Px(6.0)),
-                    ))
-                    .with_children(|p| {
+            p.spawn((Node {
+                column_gap: Val::Px(6.0),
+                ..default()
+            },))
+                .with_children(|p| {
+                    for i in 0..NUM_WEAPONS as u8 {
                         p.spawn((
-                            Text::new(format!(
-                                "{} {} x0",
-                                i + 1,
-                                weapon_name(Weapon::from_index(i))
-                            )),
-                            TextFont::from_font_size(13.0),
-                            TextColor(Color::srgb(0.6, 0.6, 0.6)),
-                            SlotText(i),
-                        ));
-                    });
-                }
-            });
+                            Node {
+                                padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
+                                border_radius: BorderRadius::all(Val::Px(6.0)),
+                                ..default()
+                            },
+                            BackgroundColor(PANEL),
+                        ))
+                        .with_children(|p| {
+                            p.spawn((
+                                typography::ui(
+                                    format!(
+                                        "{} {} x0",
+                                        i + 1,
+                                        weapon_name(Weapon::from_index(i))
+                                    ),
+                                    size::LABEL,
+                                    Color::srgb(0.6, 0.6, 0.6),
+                                ),
+                                SlotText(i),
+                            ));
+                        });
+                    }
+                });
         });
+
+    // top left: team health tracker (rows filled in by update_health_panel)
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(8.0),
+            left: Val::Px(10.0),
+            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            border_radius: BorderRadius::all(Val::Px(8.0)),
+            ..default()
+        },
+        BackgroundColor(PANEL),
+        Visibility::Hidden,
+        HealthPanel,
+    ));
 
     // bottom left: room code; bottom right: controls
     commands
@@ -159,16 +167,16 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
                 bottom: Val::Px(10.0),
                 left: Val::Px(10.0),
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
             BackgroundColor(PANEL),
-            BorderRadius::all(Val::Px(6.0)),
         ))
         .with_children(|p| {
-            p.spawn((
-                Text::new(format!("room {} - share the link to invite", net.room)),
-                TextFont::from_font_size(12.0),
-                TextColor(Color::srgb(0.8, 0.85, 0.9)),
+            p.spawn(typography::ui(
+                format!("room {} - share the link to invite", net.room),
+                size::SMALL,
+                Color::srgb(0.8, 0.85, 0.9),
             ));
         });
     commands
@@ -179,10 +187,10 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
                 right: Val::Px(10.0),
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                 flex_direction: FlexDirection::Column,
+                border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
             BackgroundColor(PANEL),
-            BorderRadius::all(Val::Px(6.0)),
         ))
         .with_children(|p| {
             for line in [
@@ -191,10 +199,10 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
                 "RMB charge, release fires",
                 "1-3 weapon   -/= zoom",
             ] {
-                p.spawn((
-                    Text::new(line),
-                    TextFont::from_font_size(11.0),
-                    TextColor(Color::srgb(0.75, 0.78, 0.82)),
+                p.spawn(typography::ui(
+                    line,
+                    size::CONTROLS,
+                    Color::srgb(0.75, 0.78, 0.82),
                 ));
             }
         });
@@ -218,16 +226,14 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
                 Node {
                     padding: UiRect::axes(Val::Px(22.0), Val::Px(14.0)),
                     flex_direction: FlexDirection::Column,
+                    border_radius: BorderRadius::all(Val::Px(10.0)),
                     ..default()
                 },
                 BackgroundColor(PANEL),
-                BorderRadius::all(Val::Px(10.0)),
             ))
             .with_children(|p| {
                 p.spawn((
-                    Text::new(""),
-                    TextFont::from_font_size(17.0),
-                    TextColor(Color::srgb(0.92, 0.94, 0.97)),
+                    typography::ui("", size::LOBBY, Color::srgb(0.92, 0.94, 0.97)),
                     LobbyText,
                 ));
             });
@@ -245,9 +251,7 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
         })
         .with_children(|p| {
             p.spawn((
-                Text::new(""),
-                TextFont::from_font_size(54.0),
-                TextColor(Color::WHITE),
+                typography::ui("", size::BANNER, Color::WHITE),
                 BannerText,
             ));
         });
@@ -262,12 +266,117 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
         })
         .with_children(|p| {
             p.spawn((
-                Text::new("connecting..."),
-                TextFont::from_font_size(24.0),
-                TextColor(Color::srgb(0.9, 0.9, 0.95)),
+                typography::ui(
+                    "connecting...",
+                    size::CONNECTION,
+                    Color::srgb(0.9, 0.9, 0.95),
+                ),
+                TextLayout::new_with_justify(Justify::Center),
                 ConnText,
             ));
         });
+}
+
+/// Team health tracker: one row per team — color swatch label, hp bar, and
+/// the summed hp of the team's living frogs. Rows are only rebuilt when the
+/// displayed values actually change.
+pub fn update_health_panel(
+    mut commands: Commands,
+    net: Res<NetState>,
+    mut panel: Query<(Entity, &mut Visibility), With<HealthPanel>>,
+    mut last: Local<String>,
+) {
+    let Ok((panel, mut vis)) = panel.single_mut() else {
+        return;
+    };
+    let Some(snap) = net.latest() else { return };
+    let show = snap.phase != Phase::Lobby && !net.roster.is_empty();
+    *vis = if show {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    if !show {
+        last.clear();
+        return;
+    }
+
+    // (team, label, hp, max_hp): Teams mode shows the two team names with
+    // all members summed; FFA shows one row per player.
+    let mut teams: Vec<(u8, String, f32, f32)> = Vec::new();
+    for p in &net.roster {
+        let hp: f32 = snap
+            .frogs
+            .iter()
+            .filter(|f| f.id == p.id && f.alive)
+            .map(|f| f.hp.max(0.0))
+            .sum();
+        if let Some(t) = teams.iter_mut().find(|t| t.0 == p.team) {
+            t.2 += hp;
+            t.3 += 100.0;
+        } else {
+            let label = match snap.mode {
+                Mode::Teams => (if p.team == 0 { "GREEN" } else { "PINK" }).to_string(),
+                Mode::Ffa => p.name.clone(),
+            };
+            teams.push((p.team, label, hp, 100.0));
+        }
+    }
+    teams.sort_by_key(|t| t.0);
+    let sig: String = teams
+        .iter()
+        .map(|(t, l, hp, max)| format!("{t}|{l}|{hp:.0}|{max};"))
+        .collect();
+    if *last == sig {
+        return;
+    }
+    *last = sig;
+
+    commands.entity(panel).despawn_related::<Children>();
+    commands.entity(panel).with_children(|p| {
+        for (team, label, hp, max) in teams {
+            let color = team_color(team);
+            p.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(7.0),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn((
+                    Node {
+                        width: Val::Px(64.0),
+                        ..default()
+                    },
+                    typography::ui(label, size::LABEL, color),
+                ));
+                row.spawn((
+                    Node {
+                        width: Val::Px(70.0),
+                        height: Val::Px(8.0),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.13)),
+                ))
+                .with_children(|bar| {
+                    bar.spawn((
+                        Node {
+                            width: Val::Percent((hp / max * 100.0).clamp(0.0, 100.0)),
+                            height: Val::Percent(100.0),
+                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(color),
+                    ));
+                });
+                row.spawn(typography::ui(
+                    format!("{hp:.0}"),
+                    size::SMALL,
+                    Color::WHITE,
+                ));
+            });
+        }
+    });
 }
 
 /// Display name for a winning team: team name in Teams, player name in FFA.
@@ -309,9 +418,7 @@ pub fn update_hud(
             String::new()
         };
         if let Ok(mut t) = texts.p5().single_mut() {
-            if t.0 != msg {
-                t.0 = msg;
-            }
+            typography::set_ui(&mut t, msg);
         }
     }
     let Some(snap) = net.latest() else { return };
@@ -327,8 +434,8 @@ pub fn update_hud(
     }
     if in_lobby {
         let mode_str = match snap.mode {
-            Mode::Teams => "TEAMS — green vs pink, shared stash",
-            Mode::Ffa => "FREE-FOR-ALL — every frog for itself",
+            Mode::Teams => "TEAMS - green vs pink, shared stash",
+            Mode::Ffa => "FREE-FOR-ALL - every frog for itself",
         };
         let mut txt = format!("mode: {mode_str}\n[M] switch mode    [R] ready up\n");
         for p in &net.roster {
@@ -339,16 +446,17 @@ pub fn update_hud(
             );
         }
         if let Ok(mut t) = texts.p6().single_mut() {
-            if t.0 != txt {
-                t.0 = txt;
-            }
+            typography::set_ui(&mut t, txt);
         }
     }
 
     // phase line
     let phase_str = match snap.phase {
         Phase::Lobby => "LOBBY".to_string(),
-        Phase::Pre => format!("GET READY  {:.0}", (PRE_TIME - snap.phase_t).max(0.0).ceil()),
+        Phase::Pre => format!(
+            "GET READY  {:.0}",
+            (PRE_TIME - snap.phase_t).max(0.0).ceil()
+        ),
         Phase::Round => {
             let left = (ROUND_TIME - snap.phase_t).max(0.0);
             format!("ROUND {}   {:>2.0}s", snap.round, left.ceil())
@@ -360,9 +468,7 @@ pub fn update_hud(
         ),
     };
     if let Ok(mut t) = texts.p0().single_mut() {
-        if t.0 != phase_str {
-            t.0 = phase_str;
-        }
+        typography::set_ui(&mut t, phase_str);
     }
 
     // scores: team pair in Teams mode; you vs the leader in FFA
@@ -394,9 +500,7 @@ pub fn update_hud(
                 }
             }
         };
-        if t.0 != txt {
-            t.0 = txt;
-        }
+        typography::set_ui(&mut t, txt);
         c.0 = color;
     }
 
@@ -411,30 +515,25 @@ pub fn update_hud(
             .unwrap_or(0)
     };
     let status = match me {
-        Some(f) if !f.alive => "down for this round — respawning next round".to_string(),
+        Some(f) if !f.alive => "down for this round - respawning next round".to_string(),
         Some(f) if f.charge.is_some() => "release to FIRE!".to_string(),
-        Some(f) if f.armed => {
-            if ammo(sel.0 as usize) > 0 {
-                "ARMED — hold RMB to charge, release to fire".to_string()
-            } else {
-                "ARMED — but no ammo in this slot, pick 1-3".to_string()
-            }
+        Some(_) if ammo(sel.0 as usize) > 0 => {
+            "ARMED - hold RMB to charge, release to fire".to_string()
         }
-        Some(_) if snap.phase == Phase::Round => "grab a CRATE to arm your attack".to_string(),
+        Some(_) if (0..NUM_WEAPONS).any(|w| ammo(w) > 0) => {
+            "no ammo in this slot - pick 1-3".to_string()
+        }
+        Some(_) if snap.phase == Phase::Round => "grab a CRATE to stock a weapon".to_string(),
         _ => String::new(),
     };
     if let Ok(mut t) = texts.p2().single_mut() {
-        if t.0 != status {
-            t.0 = status;
-        }
+        typography::set_ui(&mut t, status);
     }
     for (mut t, mut c, slot) in texts.p3().iter_mut() {
         let w = Weapon::from_index(slot.0);
         let count = ammo(slot.0 as usize);
         let txt = format!("{} {} x{}", slot.0 + 1, weapon_name(w), count);
-        if t.0 != txt {
-            t.0 = txt;
-        }
+        typography::set_ui(&mut t, txt);
         c.0 = if sel.0 == slot.0 && count > 0 {
             Color::srgb(1.0, 1.0, 0.5)
         } else if sel.0 == slot.0 {
@@ -450,7 +549,7 @@ pub fn update_hud(
     for ev in &net.events {
         match ev {
             SimEvent::RoundStart { round } => {
-                banner.text = format!("ROUND {round} — GO!");
+                banner.text = format!("ROUND {round} - GO!");
                 banner.t = 1.6;
             }
             SimEvent::RoundEnd => {
@@ -470,10 +569,12 @@ pub fn update_hud(
     }
     banner.t = (banner.t - time.delta_secs()).max(0.0);
     if let Ok((mut t, mut c)) = texts.p4().single_mut() {
-        let txt = if banner.t > 0.0 { banner.text.clone() } else { String::new() };
-        if t.0 != txt {
-            t.0 = txt;
-        }
+        let txt = if banner.t > 0.0 {
+            banner.text.clone()
+        } else {
+            String::new()
+        };
+        typography::set_ui(&mut t, txt);
         c.0 = Color::srgba(1.0, 1.0, 1.0, banner.t.min(1.0));
     }
 }

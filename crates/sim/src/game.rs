@@ -141,8 +141,6 @@ pub struct Frog {
     pub grounded: bool,
     pub ground_normal: Vec2,
     pub rope: Option<Rope>,
-    /// Collected a crate this round → may fire once.
-    pub armed: bool,
     /// Weapon charge while the fire button is held, 0..1.
     pub charge: Option<f32>,
     pub input: Input,
@@ -171,7 +169,6 @@ impl Frog {
             grounded: false,
             ground_normal: v2(0.0, -1.0),
             rope: None,
-            armed: false,
             charge: None,
             input: Input::default(),
             prev_input: Input::default(),
@@ -247,6 +244,8 @@ pub enum Event {
     MineArmed { id: u16 },
     MineTriggered { id: u16 },
     Damage { frog: u8, amount: f32 },
+    /// Hard landing: the frog took fall damage and is briefly stunned.
+    Ouch { frog: u8 },
     Death { frog: u8, cause: DeathCause },
     Splash { pos: Vec2 },
     Score { team: u8, kills: u8 },
@@ -409,9 +408,7 @@ impl Sim {
                 f.hurt_t = 0.0;
                 f.last_hit_by = None;
             }
-            let f = &mut self.frogs[i];
-            f.armed = false;
-            f.charge = None;
+            self.frogs[i].charge = None;
         }
         self.events.push(Event::RoundStart { round: self.round });
     }
@@ -491,7 +488,6 @@ impl Sim {
             f.pos = pos;
             f.vel = Vec2::ZERO;
             f.rope = None;
-            f.armed = false;
             f.charge = None;
             f.hurt_t = 0.0;
             f.last_hit_by = None;
@@ -723,11 +719,12 @@ impl Sim {
             f.contact_dmg_cd = 0.5;
             let dmg = (impact - CONTACT_DMG_SPEED) * 0.045;
             f.hp -= dmg;
-            f.hurt_t = f.hurt_t.max(0.35);
+            f.hurt_t = f.hurt_t.max(0.9);
             self.events.push(Event::Damage {
                 frog: f.id,
                 amount: dmg,
             });
+            self.events.push(Event::Ouch { frog: f.id });
         }
 
         // --- crate pickup ---
@@ -745,7 +742,6 @@ impl Sim {
             if let Some(w) = picked {
                 let inv = &mut self.inventory[f.team as usize][w as usize];
                 *inv = inv.saturating_add(1).min(9);
-                f.armed = true;
                 self.events.push(Event::CratePickup {
                     frog: f.id,
                     weapon: w,
@@ -754,10 +750,11 @@ impl Sim {
         }
 
         // --- weapon charge / fire ---
+        // A weapon in the team stash (this round's crates or leftovers from
+        // earlier rounds) is all it takes to fire — no fresh crate needed.
         let sel = Weapon::from_index(f.input.sel.min(NUM_WEAPONS as u8 - 1));
         let can_fire = can_act
             && phase == Phase::Round
-            && f.armed
             && self.inventory[f.team as usize][sel as usize] > 0;
         if f.pressed(BTN_FIRE) && can_fire && f.charge.is_none() {
             f.charge = Some(0.0);
@@ -765,12 +762,11 @@ impl Sim {
         if let Some(c) = &mut f.charge {
             *c = (*c + DT / CHARGE_TIME).min(1.0);
             let released = !f.input.held(BTN_FIRE);
-            let still_ok = can_act && phase == Phase::Round && f.armed;
+            let still_ok = can_act && phase == Phase::Round;
             if released || !still_ok {
                 if released && still_ok && self.inventory[f.team as usize][sel as usize] > 0 {
                     let charge = *c;
                     self.inventory[f.team as usize][sel as usize] -= 1;
-                    f.armed = false;
                     let id = self.next_proj_id;
                     self.next_proj_id = self.next_proj_id.wrapping_add(1);
                     let speed = match sel {
@@ -1123,19 +1119,7 @@ pub fn body_move(
 ) -> (f32, Vec2) {
     let (np, _) = terrain.march_circle(*pos, *vel * DT, r);
     *pos = np;
-    // Clamp inside the world horizontally.
-    if pos.x < r {
-        pos.x = r;
-        if vel.x < 0.0 {
-            vel.x = 0.0;
-        }
-    }
-    if pos.x > WIDTH - r {
-        pos.x = WIDTH - r;
-        if vel.x > 0.0 {
-            vel.x = 0.0;
-        }
-    }
+    // No horizontal walls: past the island's edge there is only water below.
     let d = terrain.sample(*pos) - r;
     if d < 0.6 {
         let n = terrain.normal(*pos);

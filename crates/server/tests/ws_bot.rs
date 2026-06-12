@@ -64,10 +64,14 @@ async fn send(ws: &mut Ws, msg: &ClientMsg) {
 }
 
 fn input(buttons: u8, aim_x: f32, aim_y: f32) -> ClientMsg {
+    input_sel(buttons, aim_x, aim_y, 0)
+}
+
+fn input_sel(buttons: u8, aim_x: f32, aim_y: f32, sel: u8) -> ClientMsg {
     ClientMsg::Input(Input {
         buttons,
         aim: v2(aim_x, aim_y),
-        sel: 0,
+        sel,
     })
 }
 
@@ -111,21 +115,32 @@ async fn full_loop_join_walk_collect_fire() {
     let moved = (x1 - x0).abs().max((x2 - x0).abs());
     assert!(moved > 25.0, "bot should walk, moved {moved}px");
 
-    // Crate: dev hook drops one on our head; we should pick it up and arm.
+    // Crate: dev hook drops one on our head; we pick it up into the stash.
     send(&mut ws, &ClientMsg::Debug(DebugCmd::DropCrate)).await;
-    wait_for(&mut ws, 5.0, |s| {
-        s.events
-            .iter()
-            .any(|e| matches!(e, Event::CratePickup { frog, .. } if *frog == my_id))
-            || s.frogs.iter().any(|f| f.id == my_id && f.armed)
+    let snap = wait_for(&mut ws, 5.0, |s| {
+        s.inventory.iter().flatten().sum::<u8>() > 0
     })
     .await;
+    // The crate weapon is random: fire whichever slot got stocked.
+    let widx = snap
+        .inventory
+        .iter()
+        .flat_map(|inv| inv.iter())
+        .position(|n| *n > 0)
+        .unwrap()
+        % sim::game::NUM_WEAPONS;
+    let widx = widx as u8;
+
+    // Settle: a hurt/stunned frog (fall damage on rough terrain) swallows
+    // the fire press edge, so give it a second on the ground first.
+    let ts = next_snapshot(&mut ws).await.tick;
+    wait_for(&mut ws, 10.0, |s| s.tick >= ts + 150).await;
 
     // Fire straight up: charge briefly (36 sim ticks), release.
     let tc = next_snapshot(&mut ws).await.tick;
-    send(&mut ws, &input(BTN_FIRE, 0.0, -1.0)).await;
+    send(&mut ws, &input_sel(BTN_FIRE, 0.0, -1.0, widx)).await;
     wait_for(&mut ws, 10.0, |s| s.tick >= tc + 36).await;
-    send(&mut ws, &input(0, 0.0, -1.0)).await;
+    send(&mut ws, &input_sel(0, 0.0, -1.0, widx)).await;
     let snap = wait_for(&mut ws, 5.0, |s| {
         s.events
             .iter()
@@ -133,8 +148,11 @@ async fn full_loop_join_walk_collect_fire() {
             || !s.projectiles.is_empty()
     })
     .await;
-    let f = snap.frogs.iter().find(|f| f.id == my_id).unwrap();
-    assert!(!f.armed, "one shot per round: disarmed after firing");
+    assert_eq!(
+        snap.inventory.iter().flatten().sum::<u8>(),
+        0,
+        "weapon consumed from the stash on firing"
+    );
 }
 
 #[tokio::test]

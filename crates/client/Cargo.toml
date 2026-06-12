@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 sim = { path = "../sim" }
 protocol = { path = "../protocol" }
-bevy = "0.17"
+bevy = "0.18.1"
 ewebsock = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

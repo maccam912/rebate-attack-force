@@ -81,6 +81,11 @@ def main():
         sig += silence(0.018)
     write("croak_pickup", lowpass(sig, 0.4), gain=0.8)
 
+    # ouch: short pained yelp after a hard landing
+    for i, f in enumerate([340.0, 285.0]):
+        sig = burst(0.17, f, f * 0.45, am=42.0, timbre=3.0, decay=1.1)
+        write(f"croak_ouch_{i}", lowpass(sig, 0.3), gain=0.85)
+
     # death: long sad deflating croak
     sig = burst(0.5, 185.0, 62.0, am=17.0, timbre=2.8, decay=1.4)
     write("croak_death", lowpass(sig))

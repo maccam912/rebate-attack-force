@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sim::game::{Event, Input, Mode, Phase, Weapon, NUM_WEAPONS};
 use sim::math::Vec2;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientMsg {
@@ -43,7 +43,6 @@ pub struct FrogSnap {
     pub aim: Vec2,
     pub facing: f32,
     pub grounded: bool,
-    pub armed: bool,
     pub charge: Option<f32>,
     pub rope: Option<Vec<Vec2>>,
 }
