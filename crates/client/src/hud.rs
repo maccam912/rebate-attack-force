@@ -251,7 +251,8 @@ pub fn setup_hud(mut commands: Commands, net: Res<NetState>) {
         })
         .with_children(|p| {
             p.spawn((
-                typography::ui("", size::BANNER, Color::WHITE),
+                typography::ui("", size::PHASE, Color::WHITE),
+                UiTransform::from_scale(Vec2::splat(size::BANNER / size::PHASE)),
                 BannerText,
             ));
         });
