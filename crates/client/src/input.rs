@@ -49,8 +49,14 @@ pub fn lobby_keys(
 #[derive(Resource, Default)]
 pub struct Selected(pub u8);
 
+/// Rate-limits input to 50 Hz, and skips sends entirely while the input is
+/// unchanged (a 250 ms keepalive still goes out so the server sees us alive).
 #[derive(Resource, Default)]
-pub struct SendTimer(pub f32);
+pub struct SendTimer {
+    accum: f32,
+    since_send: f32,
+    last: Option<SimInput>,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn gather_and_send(
@@ -82,11 +88,12 @@ pub fn gather_and_send(
         }
     }
 
-    timer.0 += time.delta_secs();
-    if timer.0 < 1.0 / 50.0 {
+    timer.accum += time.delta_secs();
+    timer.since_send += time.delta_secs();
+    if timer.accum < 1.0 / 50.0 {
         return;
     }
-    timer.0 = 0.0;
+    timer.accum = 0.0;
 
     let mut buttons = 0u8;
     if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
@@ -136,12 +143,15 @@ pub fn gather_and_send(
         }
     }
 
-    send_msg(
-        &mut socket,
-        &ClientMsg::Input(SimInput {
-            buttons,
-            aim,
-            sel: sel.0,
-        }),
-    );
+    let input = SimInput {
+        buttons,
+        aim,
+        sel: sel.0,
+    };
+    if timer.last == Some(input) && timer.since_send < 0.25 {
+        return;
+    }
+    timer.last = Some(input);
+    timer.since_send = 0.0;
+    send_msg(&mut socket, &ClientMsg::Input(input));
 }

@@ -29,6 +29,18 @@ ready → round → walking with legs → tongue swing → fall off platforms).
   seed-deterministic). New examples: `botdbg` (ws-bot mirror), `mapdbg`
   (ASCII map dump).
 - 2026-06-11: client upgraded from Bevy 0.17 to 0.18.1.
+- 2026-06-12: deploy + capacity pass. Audio embedded into the binary
+  (`bevy_embedded_assets` ReplaceDefault; `.cargo/config.toml` sets
+  `BEVY_ASSET_PATH`; copy-dir dropped from index.html) — the browser never
+  fetches assets/ over HTTP, fixes missing audio on deploys. Measured
+  (`netbench` example): sim 0.8 us/step @ 8 players, snapshots 172-466 B —
+  the real per-connection cost was CompressionLayer gzipping the 35 MB wasm
+  on the fly. Now: dist precompressed in Dockerfile (gzip -9 + brotli -q 11),
+  served via ServeDir precompressed_br/gzip (no runtime compression);
+  wasm-opt -Oz via trunk (35.1 → 29.5 MB raw, 7.6 MB br). Snapshots
+  30 → 20 Hz; broadcast encoded once as refcounted Bytes; bounded 64-msg
+  per-client outbox sheds slow consumers; client sends input only on change
+  (250 ms keepalive).
 
 ## Next steps
 
@@ -44,5 +56,7 @@ ready → round → walking with legs → tongue swing → fall off platforms).
   the built-in `vorbis` encoder, which requires `-ac 2 -strict experimental`.
 - Multi-target camera.
 - Lobby polish: per-player colors in the roster list, maybe clickable buttons.
-- wasm-opt to shrink the ~9.5 MB gzipped wasm.
-- Initial commit still pending ("say the word").
+- If the deployed host STILL can't get audio after this image: the assets are
+  in the wasm now, so any remaining problem is the platform serving a stale
+  image — re-pull `ghcr.io/maccam912/rebate-attack-force:latest`.
+- 2026-06-12 work uncommitted ("say the word").

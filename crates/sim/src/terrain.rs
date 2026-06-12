@@ -365,11 +365,9 @@ impl Terrain {
                 let p = v2((gx as f32 + 0.5) * CELL, (gy as f32 + 0.5) * CELL);
                 let dist_to_edge = r - p.distance(c); // >0 inside the carved disc
                 let i = gy as usize * GRID_W + gx as usize;
-                if dist_to_edge > 0.0 {
-                    if self.solid[i] {
-                        self.solid[i] = false;
-                        changed = true;
-                    }
+                if dist_to_edge > 0.0 && self.solid[i] {
+                    self.solid[i] = false;
+                    changed = true;
                 }
                 // The carved disc is now open: distance can only grow.
                 if self.sdf[i] < dist_to_edge {

@@ -10,9 +10,15 @@ mod typography;
 mod view;
 
 use bevy::prelude::*;
+use bevy_embedded_assets::{EmbeddedAssetPlugin, PluginMode};
 
 fn main() {
     App::new()
+        // Audio is compiled into the binary: deployments only need the wasm
+        // bundle, the browser never fetches assets/ over HTTP.
+        .add_plugins(EmbeddedAssetPlugin {
+            mode: PluginMode::ReplaceDefault,
+        })
         .add_plugins(
             DefaultPlugins
                 // No .meta files exist, and the game server SPA-fallbacks

@@ -1,0 +1,4 @@
+# bevy_embedded_assets' build script needs to know where the asset folder
+# lives (it's per-crate at crates/client/assets, not at the workspace root).
+[env]
+BEVY_ASSET_PATH = { value = "crates/client/assets", relative = true }

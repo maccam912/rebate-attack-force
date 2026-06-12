@@ -1,7 +1,8 @@
 //! Authoritative game server: one tokio task per room, 120 Hz sim,
-//! ~30 Hz snapshots, rooms keyed by party code.
+//! ~20 Hz snapshots, rooms keyed by party code.
 
 use axum::{
+    body::Bytes,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Query, State,
@@ -29,10 +30,14 @@ pub struct AppState {
     pub seed: Option<u64>,
 }
 
+/// Per-client outbox depth. Snapshots are ~20/s; a client that falls multiple
+/// seconds behind is dropped instead of growing the queue without bound.
+const OUTBOX_CAP: usize = 64;
+
 pub enum RoomCmd {
     Join {
         name: String,
-        out: mpsc::UnboundedSender<Vec<u8>>,
+        out: mpsc::Sender<Bytes>,
         reply: tokio::sync::oneshot::Sender<u8>,
     },
     Leave {
@@ -58,7 +63,15 @@ pub enum RoomCmd {
 struct Client {
     name: String,
     ready: bool,
-    out: mpsc::UnboundedSender<Vec<u8>>,
+    out: mpsc::Sender<Bytes>,
+}
+
+impl Client {
+    /// Queue without blocking the room loop; a full outbox means the client
+    /// can't keep up and the connection is shed.
+    fn send(&self, bytes: Bytes) -> bool {
+        self.out.try_send(bytes).is_ok()
+    }
 }
 
 /// The per-room actor: owns the sim, applies commands, broadcasts snapshots.
@@ -91,7 +104,7 @@ async fn room_task(code: String, mut rx: mpsc::UnboundedReceiver<RoomCmd>, state
                         seed,
                         carves: carves.clone(),
                     };
-                    let _ = out.send(protocol::encode(&welcome));
+                    let _ = out.try_send(protocol::encode(&welcome).into());
                     clients.insert(
                         id,
                         Client {
@@ -149,11 +162,11 @@ async fn room_task(code: String, mut rx: mpsc::UnboundedReceiver<RoomCmd>, state
             pending_events.push(ev);
         }
 
-        // ~30 Hz snapshots.
-        if game.tick % 4 == 0 && !clients.is_empty() {
+        // ~20 Hz snapshots, encoded once and shared (Bytes clone is refcounted).
+        if game.tick.is_multiple_of(6) && !clients.is_empty() {
             let snap = build_snapshot(&game, std::mem::take(&mut pending_events));
-            let bytes = protocol::encode(&ServerMsg::Snapshot(snap));
-            clients.retain(|_, c| c.out.send(bytes.clone()).is_ok());
+            let bytes: Bytes = protocol::encode(&ServerMsg::Snapshot(snap)).into();
+            clients.retain(|_, c| c.send(bytes.clone()));
         }
 
         if clients.is_empty() {
@@ -195,9 +208,9 @@ fn broadcast_roster(game: &Sim, clients: &HashMap<u8, Client>) {
             })
         })
         .collect();
-    let bytes = protocol::encode(&ServerMsg::Roster(roster));
+    let bytes: Bytes = protocol::encode(&ServerMsg::Roster(roster)).into();
     for c in clients.values() {
-        let _ = c.out.send(bytes.clone());
+        c.send(bytes.clone());
     }
 }
 
@@ -292,7 +305,7 @@ async fn handle_socket(mut socket: WebSocket, q: WsQuery, state: Arc<AppState>) 
     let name = sanitize_name(name.as_deref().unwrap_or("frog"));
     let code = sanitize_code(room.as_deref().unwrap_or("PUBLIC"));
 
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (out_tx, mut out_rx) = mpsc::channel::<Bytes>(OUTBOX_CAP);
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let room_tx = room_sender(&state, &code);
     if room_tx
@@ -311,7 +324,7 @@ async fn handle_socket(mut socket: WebSocket, q: WsQuery, state: Arc<AppState>) 
         tokio::select! {
             out = out_rx.recv() => match out {
                 Some(bytes) => {
-                    if socket.send(Message::Binary(bytes.into())).await.is_err() {
+                    if socket.send(Message::Binary(bytes)).await.is_err() {
                         break;
                     }
                 }
@@ -396,13 +409,18 @@ async fn cache_headers(
 
 pub fn build_router(state: Arc<AppState>, dist_dir: &str) -> Router {
     let index = format!("{dist_dir}/index.html");
-    let files = ServeDir::new(dist_dir).fallback(ServeFile::new(index));
+    // The bundle is compressed at build time (Dockerfile writes .gz/.br next
+    // to each file). Compressing the multi-MB wasm on the fly per download
+    // would starve the 120 Hz room loops, so there is no CompressionLayer.
+    let files = ServeDir::new(dist_dir)
+        .precompressed_br()
+        .precompressed_gzip()
+        .fallback(ServeFile::new(index));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/ws", any(ws_handler))
         .fallback_service(
             tower::ServiceBuilder::new()
-                .layer(tower_http::compression::CompressionLayer::new())
                 .layer(axum::middleware::from_fn(cache_headers))
                 .service(files),
         )

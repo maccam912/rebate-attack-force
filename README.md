@@ -57,8 +57,8 @@ to the same pod.
 | --- | --- |
 | `crates/sim` | deterministic 120 Hz game core: SDF terrain, swept circle physics, tongue/rope with terrain folds, weapons, rules. No engine deps; a whole match runs in a unit test. |
 | `crates/protocol` | bincode wire messages (client ⇄ server) |
-| `crates/server` | axum WebSocket server; one tokio task per room (party code), authoritative sim, ~30 Hz snapshots. No client prediction — clients interpolate. |
-| `crates/client` | Bevy 0.18 client (native + wasm via trunk), renders snapshots, streams inputs |
+| `crates/server` | axum WebSocket server; one tokio task per room (party code), authoritative sim, ~20 Hz snapshots. No client prediction — clients interpolate. |
+| `crates/client` | Bevy 0.18 client (native + wasm via trunk), renders snapshots, streams inputs. Audio is embedded in the binary (`bevy_embedded_assets`). |
 
 ## Tests
 
