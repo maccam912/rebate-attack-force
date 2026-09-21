@@ -7,24 +7,30 @@ import type {
   WeaponId,
 } from "../shared/types";
 import { renderGame } from "./renderer";
+import { followCamera, screenToWorld, type Camera } from "./camera";
 import { RoomConnection, type LobbyState } from "./network";
 
 const logo = `<svg viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M5 30 17 8l16 5 15-3 11 22-8 22H17Z" fill="#cde47b"/><path d="M17 40c-5-17 5-24 15-18 11-7 22 3 17 18-9 10-24 10-32 0Z" fill="#18372a"/><circle cx="24" cy="27" r="5" fill="#e5ebbd"/><circle cx="41" cy="27" r="5" fill="#e5ebbd"/><circle cx="25" cy="27" r="2" fill="#18372a"/><circle cx="40" cy="27" r="2" fill="#18372a"/><path d="M27 38q6 5 12-1" stroke="#d0e77e" stroke-width="2" stroke-linecap="round"/><path d="m9 47-5 9 15-2M51 50l8 7 3-15" fill="#cde47b"/></svg>`;
-const crateIcon = `<svg viewBox="0 0 40 40" aria-hidden="true"><path d="m6 11 14-7 14 7v19l-14 7-14-7Z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m6 11 14 7 14-7M20 18v19M13 8l14 7v11" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
-<header class="site-header"><a class="brand" href="/" aria-label="Rebate Attack Force home">${logo}<div class="brand-name"><span>REBATE</span><span>ATTACK FORCE</span></div><span class="brand-tag">ALPHA 01</span></a><div class="header-actions"><button class="header-link" id="guide-button">Field guide ↗</button><button class="sound-button" id="sound-button" aria-label="Enable sound"><span id="sound-icon">◌</span> <span id="sound-label">Sound off</span></button></div></header>
-<main class="page"><div class="page-heading"><div><div class="eyebrow">Small frogs. Questionable intentions.</div><h1>Welcome to the scrapyard.</h1></div><div class="map-meta"><span>SWING. LOOT. FIRE.</span><span class="pill"><i class="live-dot"></i> No accounts. Just frogs.</span></div></div>
-<div class="layout"><section class="arena-wrap" aria-label="Game"><div class="arena" id="arena"><canvas id="game" width="1440" height="850" tabindex="0" aria-label="Scrapyard arena. Use A and D to move, W to jump, mouse and Space to grapple, and 2 to equip your weapon."></canvas><div class="arena-label"><span></span> THE SCRAPYARD · 01</div><div class="arena-top-tools"><button class="icon-button" id="reset-button" title="Restart local match" aria-label="Restart local match">↻</button><button class="icon-button" id="fullscreen-button" title="Fullscreen (F)" aria-label="Toggle fullscreen">⛶</button></div>
-<div class="hero" id="hero"><div class="overline">A TURN-BASED TANGLE OF TROUBLE</div><h2>BIG LEAPS.<br><em>PETTY CRIMES.</em></h2><p>Sling through the scrapyard, snag a supply crate, and make it someone else’s problem.</p><div class="hero-stamp"><span>Original little troublemakers</span><span>2–4 friends</span></div></div>
-<div class="hud" id="hud" hidden><div><div class="turn-player" id="turn-player"></div><div class="turn-caption" id="turn-caption"></div></div><div class="timer" id="timer"></div></div><div class="objective-toast" id="objective-toast"></div><div class="charging-indicator" id="charging" hidden>SHOT POWER<div class="power-meter"><div id="power-fill"></div></div></div>
-<div class="match-over" id="match-over" hidden><div><div class="eyebrow">THE SCRAPYARD HAS SPOKEN</div><h2 id="winner-name"></h2><p>Another day. Another questionable delivery.</p><button class="primary-button" id="rematch-button">Run it back <span>↗</span></button></div></div></div>
-<div class="arena-bottom"><div class="toolbelt"><button class="tool-button active" id="grapple-tool"><span class="key">1</span> Grappling tongue</button><button class="tool-button" id="weapon-tool"><span class="key">2</span> <span id="weapon-tool-label">Find a crate</span></button></div><button class="end-turn" id="end-turn">End turn <span class="key">↵</span></button></div>
-<div class="controls-ribbon"><div class="control"><span class="key">A</span><span class="key">D</span><span>Move / swing</span></div><div class="control"><span class="key">W</span><span class="key">S</span><span>Jump / reel</span></div><div class="control"><i class="mouse-icon"></i><span>Aim + use tool</span></div><div class="control"><span class="key">Space</span><span>Hook / release</span></div><div class="control"><span class="key">F</span><span>Fullscreen</span></div></div>
-<div class="touch-controls" aria-label="Touch controls"><button data-hold="left">←</button><button data-hold="right">→</button><button id="touch-jump">Jump</button><button data-hold="up">Reel ↑</button><button data-hold="down">↓</button><button id="touch-hook">Hook</button></div></section>
-<aside class="sidebar"><section class="panel" id="play-panel"></section><section class="panel how-panel"><div class="eyebrow">A SIMPLE PLAN. PROBABLY.</div><div class="steps"><div class="step" id="step-swing"><span class="step-number">01</span><div><strong>Get a little airborne.</strong><p>Hook any island. Reel in, swing out, and let momentum do its thing.</p></div></div><div class="step" id="step-crate"><span class="step-number">02</span><div><strong>Crate before chaos.</strong><p>Crates add to your stash. Save unused weapons for a later turn.</p></div></div><div class="step" id="step-fire"><span class="step-number">03</span><div><strong>Special delivery.</strong><p>Take your shot, then use your retreat time to get out of trouble.</p></div></div></div></section><div class="flavor-card">${crateIcon}<span>100% recycled firepower.<br>Absolutely no refunds.</span></div></aside></div>
-<footer class="footer"><span><i class="status-dot"></i><span id="connection-status">THE SCRAPYARD IS OPEN</span></span><span>Made from scratch. Inspired by a good swing.</span></footer></main>
-<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last frog standing wins. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Water is a one-way trip.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. W or ↑ to jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Touch crates to stock up on rockets, grenades, or close-range pulses. Choose a weapon in your stash, press 2, aim, hold to charge, then release.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Local mode shares a keyboard. Online mode gives you a private room link for 2–4 players. The host starts once everyone is in.</div></div><p>Practice keeps you in control and respawns your target. These maps and frogs are original. Sound effects are CC0 by Kenney.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
+<main class="arena" id="arena" aria-label="Rebate Attack Force">
+  <canvas id="game" tabindex="0" aria-label="Scrapyard arena. A and D to move, W to jump, mouse and Space to grapple, 2 for weapons. Escape opens the menu."></canvas>
+  <div class="arena-top-tools">
+    <button class="icon-button" id="menu-button" aria-label="Open game menu" aria-expanded="false">☰</button>
+    <button class="icon-button" id="guide-button" aria-label="Field guide" title="Controls">?</button>
+    <button class="icon-button" id="sound-button" aria-label="Enable sound"><span id="sound-icon">◌</span><span id="sound-label" class="sr-only">Sound off</span></button>
+    <button class="icon-button" id="reset-button" title="Restart local match" aria-label="Restart local match">↻</button>
+    <button class="icon-button" id="fullscreen-button" title="Fullscreen (F)" aria-label="Toggle fullscreen">⛶</button>
+  </div>
+  <div class="hud" id="hud" hidden><div><div class="turn-player" id="turn-player"></div><div class="turn-caption" id="turn-caption"></div></div><div class="timer" id="timer"></div></div>
+  <div class="objective-toast" id="objective-toast"></div>
+  <div class="charging-indicator" id="charging" hidden>SHOT POWER<div class="power-meter"><div id="power-fill"></div></div></div>
+  <div class="arena-bottom"><div class="toolbelt"><button class="tool-button active" id="grapple-tool"><span class="key">1</span> Grapple</button><button class="tool-button" id="weapon-tool"><span class="key">2</span> <span id="weapon-tool-label">Find a crate</span></button><div class="inventory" id="inventory"></div></div><button class="end-turn" id="end-turn">End turn <span class="key">↵</span></button></div>
+  <div class="touch-controls" aria-label="Touch controls"><button data-hold="left" aria-label="Move left">←</button><button data-hold="right" aria-label="Move right">→</button><button id="touch-jump">Jump</button><button data-hold="up">Reel ↑</button><button data-hold="down" aria-label="Pay out rope">↓</button><button id="touch-hook">Hook</button></div>
+  <div class="menu-backdrop" id="menu-overlay"><section class="panel menu-panel" aria-label="Game menu"><div class="menu-brand">${logo}<h1>REBATE <span>ATTACK FORCE</span></h1></div><button class="secondary-button" id="resume-button" hidden>Resume game <span>Esc</span></button><div id="play-panel"></div><div class="connection-status" id="connection-status">THE SCRAPYARD IS OPEN</div></section></div>
+  <div class="match-over" id="match-over" hidden><div><div class="eyebrow">THE SCRAPYARD HAS SPOKEN</div><h2 id="winner-name"></h2><button class="primary-button" id="rematch-button">Run it back <span>↗</span></button></div></div>
+</main>
+<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last frog standing wins. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Water is a one-way trip.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. W or ↑ to jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Touch crates to stock up on rockets, grenades, or close-range pulses. Choose a weapon in your stash, press 2, aim, hold to charge, then release.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, jump onto, or stomp them from above to send them rolling. Local mode shares a keyboard. Online mode gives you a private room link for 2–4 players. The host starts once everyone is in.</div></div><p>Practice keeps you in control and respawns your target. These maps and frogs are original. Sound effects are CC0 by Kenney.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -46,7 +52,11 @@ let tool: "grapple" | "weapon" = "grapple";
 let sound = false;
 let playerName = "Sprout";
 let busy = false;
-let aim = { x: 345, y: 199 };
+let aim = { x: 440, y: 1400 };
+let pointer: { x: number; y: number } | null = null;
+let camera: Camera | null = null;
+let viewport = { width: innerWidth, height: innerHeight, dpr: 1 };
+let menuOpen = false;
 const keys = new Set<string>();
 let chargingAt: number | null = null;
 let toastTimer = 0;
@@ -108,6 +118,7 @@ function active() {
 function canControl() {
   return (
     screen === "playing" &&
+    !menuOpen && $("guide").hidden &&
     (state.phase === "playing" || state.phase === "retreat") &&
     (!network || network.sessionId === state.activePlayerId)
   );
@@ -193,6 +204,9 @@ function rosterMarkup() {
 }
 function renderPanel() {
   const panel = $("play-panel");
+  app.dataset.screen = screen;
+  menuOpen = false;
+  syncMenu();
   if (screen === "menu") {
     panel.innerHTML = `<div class="panel-title"><h2>Pick your trouble.</h2><span class="tiny-tag">LET’S PLAY</span></div><div class="mode-tabs" role="tablist" aria-label="Game mode">${(["practice", "local", "online"] as const).map((m) => `<button class="mode-tab ${m === selectedMode ? "active" : ""}" role="tab" aria-selected="${m === selectedMode}" data-mode="${m}">${m === "practice" ? "Practice" : m === "local" ? "Local" : "Online"}</button>`).join("")}</div><label class="input-label" for="player-name">YOUR CALLSIGN</label><input class="text-input" id="player-name" maxlength="20" value="${escapeHtml(playerName)}" autocomplete="nickname" placeholder="A perfectly normal frog"/><p class="mode-description">${selectedMode === "practice" ? "Find your swing. Try the weapons. Your patient target frog won’t hold a grudge." : selectedMode === "local" ? "Two frogs. One keyboard. Take turns making life difficult for a nearby friend." : "Make a private room, send the link, and bring up to three friends. No sign-up required."}</p><button class="primary-button" id="start-button" ${busy ? "disabled" : ""}>${busy ? "Connecting…" : selectedMode === "practice" ? "Start practice" : selectedMode === "local" ? "Start local match" : "Create a room"} <span>↗</span></button>${selectedMode === "online" ? '<div class="join-fields"><input class="text-input" id="room-code-input" aria-label="Room code or invite link" placeholder="Have a room code?" maxlength="200"/><button id="join-button">Join</button></div>' : ""}<div class="anonymous-note">${selectedMode === "online" ? "↗ Share a link. Skip the sign-up." : "⌁ Keyboard + mouse recommended"}</div>`;
     panel.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(
@@ -227,25 +241,38 @@ function renderPanel() {
     $("launch-room").onclick = () => network?.start();
     $("leave-button").onclick = () => void leaveToMenu();
   } else {
-    panel.innerHTML = `<div class="panel-title"><h2>The troublemakers.</h2><span class="tiny-tag">${modeLabel()}</span></div><div class="session-title"><i class="live-dot"></i> ${network ? "Connected · server rules" : selectedMode === "practice" ? "Your very own testing ground" : "Pass the keyboard each turn"}</div><div class="roster" id="roster">${rosterMarkup()}</div><div class="weapon-card"><div class="weapon-label" id="weapon-label">YOUR STASH · UNUSED AMMO CARRIES</div><div class="weapon-name" id="weapon-name">Crate required</div><div class="weapon-note" id="weapon-note">Find a crate to get your hands on something irresponsible.</div><div class="inventory" id="inventory"></div></div>${network ? '<button class="secondary-button" id="copy-invite">Copy room link</button>' : ""}<button class="secondary-button" id="leave-button">${network ? "Leave match" : "Back to camp"}</button>`;
+    panel.innerHTML = `<div class="panel-title"><h2>The troublemakers.</h2><span class="tiny-tag">${modeLabel()}</span></div><div class="session-title"><i class="live-dot"></i> ${network ? "Connected · server rules" : selectedMode === "practice" ? "Your very own testing ground" : "Pass the keyboard each turn"}</div><div class="roster" id="roster">${rosterMarkup()}</div><div class="weapon-card"><div class="weapon-label" id="weapon-label">YOUR STASH · UNUSED AMMO CARRIES</div><div class="weapon-name" id="weapon-name">Crate required</div><div class="weapon-note" id="weapon-note">Find a crate to get your hands on something irresponsible.</div></div>${network ? '<button class="secondary-button" id="copy-invite">Copy room link</button>' : ""}<button class="secondary-button" id="leave-button">${network ? "Leave match" : "Back to camp"}</button>`;
     $("leave-button").onclick = () => void leaveToMenu();
     if (network) $("copy-invite").onclick = copyInvite;
-    $("inventory").onclick = (event) => {
-      const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
-        "[data-weapon]",
-      );
-      if (button && !button.disabled) {
-        command({
-          type: "selectWeapon",
-          weapon: button.dataset.weapon as WeaponId,
-        });
-        tool = "weapon";
-        updateHud(true);
-      }
-    };
+
   }
   updateHud(true);
 }
+$("inventory").onclick = (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-weapon]");
+  if (button && !button.disabled) {
+    command({ type: "selectWeapon", weapon: button.dataset.weapon as WeaponId });
+    tool = "weapon";
+    updateHud(true);
+  }
+};
+function syncMenu() {
+  $("menu-overlay").hidden = screen === "playing" && !menuOpen;
+  $("resume-button").hidden = screen !== "playing";
+  $("menu-button").setAttribute("aria-expanded", String(menuOpen || screen !== "playing"));
+}
+function toggleMenu() {
+  if (screen !== "playing") return;
+  clearInputs();
+  menuOpen = !menuOpen;
+  syncMenu();
+  updateHud(true);
+  if (menuOpen) $("resume-button").focus();
+  else canvas.focus();
+}
+$("menu-button").onclick = toggleMenu;
+$("resume-button").onclick = toggleMenu;
+
 function startLocal() {
   clearInputs();
   engine = new GameEngine({
@@ -266,6 +293,9 @@ function startLocal() {
   canvas.focus();
 }
 function resetObserved() {
+  camera = null;
+  pointer = null;
+  aim = { x: (active()?.x ?? 220) + 200, y: (active()?.y ?? 1582) - 220 };
   previousCrates = state.crates.length;
   previousProjectiles = new Set();
   previousExplosions = new Set();
@@ -390,7 +420,6 @@ function updateHud(force = false) {
   lastHud = now;
   const running = screen === "playing",
     p = active();
-  $("hero").hidden = screen === "playing";
   $("hud").hidden = !running;
   $("match-over").hidden = !running || state.phase !== "finished";
   $("grapple-tool").classList.toggle("active", tool === "grapple");
@@ -403,10 +432,7 @@ function updateHud(force = false) {
     ? weaponName(p.weapon)
     : "Find a crate";
   if (!running) {
-    $("objective-toast").textContent =
-      screen === "lobby"
-        ? "Your invite link is the only ticket your friends need."
-        : "";
+    $("objective-toast").textContent = "";
     return;
   }
   if (!p) return;
@@ -437,19 +463,7 @@ function updateHud(force = false) {
         ? `${p.name} is making a move. Your turn is coming.`
         : state.phase === "retreat"
           ? "Delivery made! Swing to safety before your turn ends."
-          : p.hasCrate
-            ? "Ammo ready. Press 2, aim, hold to charge, release to fire."
-            : p.rope
-              ? "A / D to swing · W / S to reel · Space to let go"
-              : "Aim at an island + click to hook. Grab a crate to arm yourself.";
-  $("step-swing").classList.toggle("current", !p.hasCrate && !p.rope);
-  $("step-swing").classList.toggle("completed", !!p.rope || p.hasCrate);
-  $("step-crate").classList.toggle("current", !!p.rope && !p.hasCrate);
-  $("step-crate").classList.toggle("completed", p.hasCrate);
-  $("step-fire").classList.toggle(
-    "current",
-    p.hasCrate || state.phase === "retreat",
-  );
+          : "";
   if ($("roster")) {
     const signature =
       state.players
@@ -532,10 +546,13 @@ function detectEvents() {
 }
 function updateAim(event: PointerEvent) {
   const r = canvas.getBoundingClientRect();
-  aim = {
-    x: ((event.clientX - r.left) / r.width) * state.width,
-    y: ((event.clientY - r.top) / r.height) * state.height,
-  };
+  pointer = { x: (event.clientX - r.left) / r.width, y: (event.clientY - r.top) / r.height };
+  refreshAim();
+}
+function refreshAim() {
+  if (camera && pointer) aim = screenToWorld(camera, {
+    x: pointer.x * viewport.width, y: pointer.y * viewport.height,
+  });
 }
 canvas.addEventListener("pointermove", updateAim);
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -588,6 +605,10 @@ window.addEventListener("keydown", (e) => {
     )
   )
     e.preventDefault();
+  if (key === "escape") {
+    toggleMenu();
+    return;
+  }
   if (key === "f") {
     void fullscreen();
     return;
@@ -636,7 +657,7 @@ $("rematch-button").onclick = restart;
 async function fullscreen() {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
-    else await $("arena").requestFullscreen();
+    else await app.requestFullscreen();
   } catch {
     announce("Fullscreen isn’t available in this browser.");
   }
@@ -684,7 +705,8 @@ function frame(now: number) {
   const dt = Math.min((now - prevTime) / 1000, 0.05);
   prevTime = now;
   accumulated += dt;
-  if (engine && screen === "playing") {
+  refreshAim();
+  if (engine && screen === "playing" && !menuOpen && $("guide").hidden) {
     syncInput();
     engine.step(dt);
     state = engine.state;
@@ -712,7 +734,11 @@ function frame(now: number) {
       }),
     };
   } else displayedPlayers.clear();
+  camera = followCamera(camera, renderedState, viewport.width, viewport.height, dt);
+  refreshAim();
   renderGame(ctx, renderedState, {
+    camera,
+    viewport,
     time: accumulated,
     aim,
     tool,
@@ -723,6 +749,14 @@ function frame(now: number) {
   updateHud();
   requestAnimationFrame(frame);
 }
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  viewport = { width: rect.width, height: rect.height, dpr: Math.min(devicePixelRatio || 1, 2) };
+  canvas.width = Math.round(rect.width * viewport.dpr);
+  canvas.height = Math.round(rect.height * viewport.dpr);
+}
+new ResizeObserver(resizeCanvas).observe(canvas);
+resizeCanvas();
 updateSound();
 renderPanel();
 requestAnimationFrame(frame);
@@ -735,7 +769,10 @@ Object.assign(window, {
       roomId: network?.roomId || null,
       sessionId: network?.sessionId || null,
       tool,
-      coordinateSystem: "x right, y down; 1440 × 850",
+      coordinateSystem: `x right, y down; ${state.width} × ${state.height}`,
+      camera,
+      aim,
+      viewport,
       ...state,
     }),
 });

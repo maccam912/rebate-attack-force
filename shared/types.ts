@@ -19,6 +19,16 @@ export interface PlayerInput {
   aimY: number;
 }
 
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface Rope extends Point {
+  length: number;
+  bends: Point[];
+}
+
 export interface Player {
   id: string;
   name: string;
@@ -30,7 +40,9 @@ export interface Player {
   hp: number;
   alive: boolean;
   grounded: boolean;
-  rope: { x: number; y: number; length: number } | null;
+  rope: Rope | null;
+  rotation: number;
+  tumble: number;
   inventory: Record<WeaponId, number>;
   weapon: WeaponId | null;
   hasCrate: boolean;

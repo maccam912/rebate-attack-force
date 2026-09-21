@@ -1,6 +1,10 @@
 import type { GameState, Player, WeaponId } from "../shared/types";
 
+import type { Camera } from "./camera";
+
 export interface RenderOptions {
+  camera: Camera;
+  viewport: { width: number; height: number; dpr: number };
   time: number;
   aim: { x: number; y: number };
   tool: "grapple" | "weapon";
@@ -82,7 +86,7 @@ function text(
 
 export function drawFrog(
   c: CanvasRenderingContext2D,
-  player: Pick<Player, "x" | "y" | "color" | "vx" | "vy" | "grounded">,
+  player: Pick<Player, "x" | "y" | "color" | "vx" | "vy" | "grounded" | "rotation">,
   time: number,
   scale = 1,
   aim?: { x: number; y: number },
@@ -91,7 +95,7 @@ export function drawFrog(
   c.translate(player.x, player.y);
   c.scale(scale, scale);
   const tilt = Math.max(-0.3, Math.min(0.3, player.vx / 1000));
-  c.rotate(tilt);
+  c.rotate(tilt + player.rotation);
   const bounce = player.grounded ? Math.sin(time * 2.5) * 0.8 : 0;
   c.translate(0, bounce);
   // Boots, knapsack and scarf: all drawn for this game.
@@ -256,7 +260,7 @@ function platform(
       circle(c, x + i - 2 + shift, y - 12, 2.5, "#f0ce81");
   }
   // Roots and climbing vines underneath small islands.
-  if (y < 600) {
+  if (h < 100) {
     for (let i = 25; i < w - 15; i += 74) {
       const sway = Math.sin(t + i) * 3;
       line(
@@ -336,7 +340,7 @@ function water(c: CanvasRenderingContext2D, s: GameState, t: number) {
   c.fillStyle = "#669b8dd0";
   c.fill();
   for (let i = 0; i < 48; i++) {
-    const x = (i * 97 + t * (i % 2 ? 4 : -3) + 1440) % 1440,
+    const x = (i * 97 + t * (i % 2 ? 4 : -3) + s.width) % s.width,
       y = s.waterY + 8 + ((i * 19) % 65);
     line(c, [x, y, x + 12 + (i % 17), y], "#b2d2b550", 2);
   }
@@ -356,8 +360,18 @@ export function renderGame(
   o: RenderOptions,
 ) {
   c.save();
-  c.clearRect(0, 0, s.width, s.height);
-  background(c, s, o.time);
+  const { camera, viewport } = o;
+  c.setTransform(viewport.dpr, 0, 0, viewport.dpr, 0, 0);
+  c.clearRect(0, 0, viewport.width, viewport.height);
+  // Background fills the screen independently from the world camera.
+  c.save();
+  const backgroundScale = Math.max(viewport.width / 1440, viewport.height / 850);
+  c.translate((viewport.width - 1440 * backgroundScale) / 2, (viewport.height - 850 * backgroundScale) / 2);
+  c.scale(backgroundScale, backgroundScale);
+  background(c, { ...s, width: 1440, height: 850 }, o.time);
+  c.restore();
+  c.scale(camera.zoom, camera.zoom);
+  c.translate(-camera.x, -camera.y);
   if (s.explosions.some((e) => e.age < 0.2)) {
     const strength = 3;
     c.translate(
@@ -365,19 +379,11 @@ export function renderGame(
       Math.cos(o.time * 93) * strength,
     );
   }
-  s.platforms.forEach((p, i) => platform(c, p, i, o.time));
-  // Hand-painted scraps and signposts stay outside the gameplay silhouettes.
-  line(c, [98, 650, 98, 600], "#3a5545", 5);
-  rounded(c, 63, 585, 80, 29, 3, "#d1cc9b", ink);
-  text(c, "NO REFUNDS", 69, 604, 10, ink, 800);
-  for (const [x, y] of [
-    [465, 650],
-    [1190, 650],
-  ]) {
-    rounded(c, x, y - 21, 37, 21, 4, "#8b9c73", ink);
-    line(c, [x + 6, y - 11, x + 30, y - 11], "#4e6c50", 2);
-    rounded(c, x + 10, y - 28, 16, 8, 2, "#738661", ink);
-  }
+  s.platforms.forEach((p, i) => {
+    if (p.x + p.w >= camera.x - 40 && p.x <= camera.x + camera.width + 40 &&
+        p.y + p.h >= camera.y - 40 && p.y <= camera.y + camera.height + 40)
+      platform(c, p, i, o.time);
+  });
   for (const box of s.crates)
     crate(
       c,
@@ -391,8 +397,10 @@ export function renderGame(
   for (const p of s.players) {
     if (!p.alive) continue;
     if (p.rope) {
-      line(c, [p.x, p.y, p.rope.x, p.rope.y], "#294a3c", 4);
-      line(c, [p.x, p.y, p.rope.x, p.rope.y], "#e8d79a", 2);
+      const points = [p.rope, ...p.rope.bends, p].flatMap((point) => [point.x, point.y]);
+      line(c, points, "#294a3c", 4);
+      line(c, points, "#e8d79a", 2);
+      for (const bend of p.rope.bends) circle(c, bend.x, bend.y, 3, "#fff2b5");
       circle(c, p.rope.x, p.rope.y, 7, "#eff0b7");
       circle(c, p.rope.x, p.rope.y, 3, "#5b7954");
     }
@@ -534,9 +542,29 @@ export function renderGame(
   water(c, s, o.time);
   // Floating seed motes.
   for (let i = 0; i < 17; i++) {
-    const x = (i * 113 + Math.sin(o.time * 0.2 + i) * 15) % 1440,
+    const x = (i * 113 + Math.sin(o.time * 0.2 + i) * 15) % s.width,
       y = 245 + ((i * 89 + o.time * 6) % 475);
     circle(c, x, y, 1.5, "#f7f3d680");
+  }
+  if (!o.menu) {
+    for (const p of s.players) {
+      if (!p.alive || p.id === s.activePlayerId) continue;
+      const inset = 65 / camera.zoom;
+      const x = Math.max(camera.x + inset, Math.min(camera.x + camera.width - inset, p.x));
+      const y = Math.max(camera.y + inset, Math.min(camera.y + camera.height - 100 / camera.zoom, p.y));
+      if (Math.hypot(x - p.x, y - p.y) < 30) continue;
+      circle(c, x, y, 14 / camera.zoom, "#173329dd");
+      const angle = Math.atan2(p.y - y, p.x - x);
+      c.save();
+      c.translate(x, y);
+      c.scale(1 / camera.zoom, 1 / camera.zoom);
+      c.rotate(angle);
+      poly(c, [8, 0, -5, -6, -5, 6], p.color);
+      c.restore();
+      c.textAlign = "center";
+      text(c, p.name, x, y + 29 / camera.zoom, 12 / camera.zoom, ink, 800);
+      c.textAlign = "left";
+    }
   }
   c.restore();
 }

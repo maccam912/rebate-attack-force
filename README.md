@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open **http://localhost:5173**. Vite and the Colyseus room server start together.
+Open **http://localhost:5173**. Vite and the Colyseus room server start together. The game fills the viewport, with a compact in-game HUD and a menu opened with Escape. Press F for browser fullscreen.
 
 - **Practice:** unlimited movement time, a target frog, respawns, and all three weapons to discover.
 - **Local:** two players share one keyboard and take turns.
@@ -37,8 +37,11 @@ Each frog has 100 HP. A versus turn lasts **45 seconds**. Move and grapple in re
 | Hold left mouse with weapon selected, then release | Charge and fire |
 | Enter | End turn |
 | F | Fullscreen |
+| Escape | Open / close the game menu (pauses local play) |
 
-Ropes reach 680 world pixels and attach to any solid platform surface. Release preserves momentum. The trajectory hint uses the selected weapon's speed and gravity. Rockets explode on impact, grenades bounce with a short fuse, and the recoil popper creates a close-range blast. Grenades and rockets can hurt their owner.
+The scrapyard spans **4,320 × 1,800 world pixels**, with 29 platforms, elevated supply routes, and a camera that follows the active frog. Edge markers point toward opponents outside the view.
+
+Ropes reach 680 world pixels and attach to any solid platform surface. They wrap around terrain corners and unwind as you swing back; reeling accounts for every segment. Release preserves momentum. Frogs are solid bodies: push them, land on them and jump off, or stomp from height to send them tumbling. The trajectory hint uses the selected weapon's speed and gravity. Rockets explode on impact, grenades bounce with a short fuse, and the recoil popper creates a close-range blast. Grenades and rockets can hurt their owner.
 
 ## Deploy to Kubernetes
 
@@ -63,6 +66,8 @@ See [deployment instructions](docs/deployment.md) for ingress, TLS, health probe
 
 - `shared/game.ts`: headless, fixed 120 Hz simulation; no renderer or transport dependencies.
 - `server/AttackRoom.ts`: authoritative Colyseus room; validates and rate-limits client inputs, steps the simulation, broadcasts snapshots.
+- `shared/rope.ts`: persistent rope contacts and terrain visibility routing.
+- `src/camera.ts`: viewport scaling, active-player tracking, and pointer conversion.
 - `src/renderer.ts`: original Canvas 2D frogs, terrain, effects, and atmosphere.
 - `src/main.ts`: browser interface, input, sound, and render interpolation.
 - `src/network.ts`: anonymous rooms and short-drop reconnects.
@@ -85,7 +90,7 @@ Browser tests use system Chrome on macOS when present. Otherwise install Chromiu
 
 ## Scope of this first version
 
-One arena, one frog per player, 2–4 online players, three weapons, original visuals and sound effects. There is no AI opponent, terrain destruction, rope wrapping around corners, multi-frog teams, public matchmaking, persistent match recovery, or support for multiple uncoordinated server replicas. Short connection drops reconnect within 15 seconds while the tab stays open; reloading does not reclaim a running match's seat. Keyboard and mouse provide the intended experience; the responsive UI includes basic touch controls.
+One arena, one frog per player, 2–4 online players, three weapons, original visuals and sound effects. There is no AI opponent, terrain destruction, multi-frog teams, public matchmaking, persistent match recovery, or support for multiple uncoordinated server replicas. Short connection drops reconnect within 15 seconds while the tab stays open; reloading does not reclaim a running match's seat. Keyboard and mouse provide the intended experience; the responsive UI includes basic touch controls.
 
 Research and fidelity boundaries are recorded in [reference mechanics](docs/reference-mechanics.md). Weapon carryover is an intentional beginner-friendly adaptation requested for Rebate Attack Force.
 

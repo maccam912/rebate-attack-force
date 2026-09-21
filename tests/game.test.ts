@@ -7,6 +7,8 @@ import {
   PLAYER_RADIUS,
   RETREAT_SECONDS,
   WATER_Y,
+  WIDTH,
+  SPAWNS,
 } from "../shared/game.js";
 import type { PlayerInput } from "../shared/types.js";
 
@@ -87,16 +89,17 @@ test("inactive and unknown players cannot move, jump, end turns, or attack", () 
 test("grapple raycast catches solid geometry, reels in, and release preserves momentum", () => {
   const game = new GameEngine();
   const player = game.state.players[0]!;
-  game.setInput("p1", input({ aimX: 300, aimY: 300 }));
+  game.setInput("p1", input({ aimX: 420, aimY: 1400 }));
   assert.equal(game.command("p1", { type: "grapple" }), true);
   assert.ok(player.rope);
   assert.ok(player.rope.length <= GRAPPLE_RANGE);
   const originalLength = player.rope.length;
-  game.setInput("p1", input({ aimX: 300, aimY: 300, right: true, up: true }));
+  const originalY = player.y;
+  game.setInput("p1", input({ aimX: 420, aimY: 1400, right: true, up: true }));
   advance(game, 0.75);
   assert.ok(player.rope);
   assert.ok(player.rope.length < originalLength - 100, "up reels the rope in");
-  assert.ok(player.y < 610, "reeling lifts the character away from the ground");
+  assert.ok(player.y < originalY - 22, "reeling lifts the character away from the ground");
   assert.ok(
     Math.hypot(player.x - player.rope.x, player.y - player.rope.y) <=
       player.rope.length + 1,
@@ -119,6 +122,7 @@ test("grapple raycast catches solid geometry, reels in, and release preserves mo
 
 test("grapple rejects empty sky and geometry outside maximum range", () => {
   const game = new GameEngine();
+  game.state.platforms = [{ id: "test-lookout", x: 600, y: 290, w: 240, h: 32 }];
   game.setInput("p1", input({ aimX: 10, aimY: 100 }));
   assert.equal(game.command("p1", { type: "grapple" }), false);
   game.state.players[0]!.x = 30;
@@ -138,11 +142,11 @@ test("fast falling characters cannot tunnel through thin shelves", () => {
   const game = new GameEngine();
   const player = game.state.players[0]!;
   player.x = 420;
-  player.y = 385;
+  player.y = 1335;
   player.vy = 1000;
   player.grounded = false;
   advance(game, 0.15);
-  assert.equal(player.y, 450 - PLAYER_RADIUS);
+  assert.equal(player.y, 1400 - PLAYER_RADIUS);
   assert.equal(player.vy, 0);
   assert.equal(player.grounded, true);
 });
@@ -386,15 +390,15 @@ test("a killing blast keeps simulating its airborne survivor and can produce a d
   const shooter = game.state.players[0]!;
   const target = game.state.players[1]!;
   Object.assign(shooter, {
-    x: 1410,
-    y: 730,
+    x: WIDTH - 30,
+    y: WATER_Y - 50,
     vy: 450,
     grounded: false,
     hasCrate: true,
     weapon: "rocket",
   });
   shooter.inventory.rocket = 1;
-  Object.assign(target, { x: 1400, y: 735, vy: 450, hp: 1, grounded: false });
+  Object.assign(target, { x: WIDTH - 40, y: WATER_Y - 45, vy: 450, hp: 1, grounded: false });
   game.setInput("p1", input({ aimX: target.x, aimY: target.y }));
   assert.equal(game.command("p1", { type: "fire" }), true);
   game.step(FIXED_STEP);
@@ -410,6 +414,12 @@ test("a killing blast keeps simulating its airborne survivor and can produce a d
 
 test("a complete match progresses through reachable crates, attacks, turns, and a winner", () => {
   const game = new GameEngine({ seed: 5 });
+  // A clear combat lane keeps this lifecycle test independent of map traversal.
+  game.state.platforms = [
+    { id: "west-test-island", x: 60, y: 1600, w: 550, h: 200 },
+    { id: "east-test-island", x: 830, y: 1600, w: 550, h: 200 },
+  ];
+  game.state.players[1]!.x = 1280;
   let attacks = 0;
   for (let turns = 0; turns < 12 && game.state.phase !== "finished"; turns++) {
     walkToFirstCrate(game);
@@ -437,4 +447,107 @@ test("a complete match progresses through reachable crates, attacks, turns, and 
   assert.equal(game.state.phase, "finished");
   assert.ok(game.state.winnerId);
   assert.equal(game.state.players.filter((player) => player.alive).length, 1);
+});
+
+
+test("the expanded arena provides elevated routes and supported spawns", () => {
+  const game = new GameEngine();
+  assert.ok(game.state.width >= 4000 && game.state.height >= 1700);
+  assert.ok(game.state.platforms.length >= 25);
+  for (const spawn of SPAWNS)
+    assert.ok(game.state.platforms.some((p) => spawn.x > p.x && spawn.x < p.x + p.w && spawn.y + PLAYER_RADIUS === p.y));
+  assert.ok(game.state.crates.some((crate) => crate.x > 3000));
+  assert.ok(game.state.crates.some((crate) => crate.y < 400));
+});
+
+function contactArena() {
+  const game = new GameEngine({ mode: "practice" });
+  game.state.platforms = [{ id: "floor", x: 0, y: 1000, w: WIDTH, h: 800 }];
+  game.state.crates = [];
+  const [a, b] = game.state.players;
+  Object.assign(a, { x: 400, y: 1000 - PLAYER_RADIUS, vx: 0, vy: 0 });
+  Object.assign(b, { x: 460, y: 1000 - PLAYER_RADIUS, vx: 0, vy: 0 });
+  return { game, a, b };
+}
+
+test("walking pushes an inactive frog instead of crossing its body", () => {
+  const { game, a, b } = contactArena();
+  game.setInput(a.id, input({ right: true }));
+  for (let frame = 0; frame < 180; frame++) {
+    game.step(FIXED_STEP);
+    assert.ok(a.x <= b.x - PLAYER_RADIUS * 2 + 0.15);
+  }
+  assert.ok(b.x > 540, "the inactive body receives momentum");
+});
+
+test("a frog can land on another, stand there, and jump off", () => {
+  const { game, a, b } = contactArena();
+  Object.assign(a, { x: b.x, y: b.y - PLAYER_RADIUS * 2 - 6, grounded: false });
+  advance(game, 0.6);
+  assert.ok(Math.abs(b.y - a.y - PLAYER_RADIUS * 2) < 0.15);
+  assert.equal(a.grounded, true);
+  assert.equal(game.command(a.id, { type: "jump" }), true);
+  advance(game, 0.15);
+  assert.ok(b.y - a.y > 80);
+});
+
+test("a high landing launches the lower frog into a sustained tumble", () => {
+  const { game, a, b } = contactArena();
+  const originalX = b.x;
+  Object.assign(a, { x: b.x - 7, y: b.y - 190, vy: 700, grounded: false });
+  advance(game, 0.25);
+  assert.ok(b.vx > 200, "stomp sends the lower body sideways");
+  assert.ok(b.tumble > 1, "the launch enables rolling friction");
+  assert.ok(Math.abs(b.rotation) > 0.2, "the visible body tumbles");
+  advance(game, 0.6);
+  assert.ok(b.x > originalX + 180, "momentum persists after the impact");
+});
+
+test("fast opposing bodies cannot tunnel through one another", () => {
+  const { game, a, b } = contactArena();
+  Object.assign(a, { x: 400, y: 600, vx: 1100, grounded: false });
+  Object.assign(b, { x: 447, y: 600, vx: -1100, grounded: false });
+  advance(game, 0.1);
+  assert.ok(a.x < b.x);
+  assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= PLAYER_RADIUS * 2 - 0.2);
+});
+
+test("body separation cannot shove a pinned frog through a wall", () => {
+  const { game, a, b } = contactArena();
+  game.state.platforms.push({ id: "wall", x: 500, y: 800, w: 80, h: 200 });
+  b.x = 500 - PLAYER_RADIUS;
+  a.x = b.x - PLAYER_RADIUS * 2;
+  game.setInput(a.id, input({ right: true }));
+  advance(game, 2);
+  assert.ok(b.x <= 500 - PLAYER_RADIUS + 0.01);
+  assert.ok(b.x - a.x >= PLAYER_RADIUS * 2 - 0.15);
+  assert.ok(a.y <= 1000 - PLAYER_RADIUS && b.y <= 1000 - PLAYER_RADIUS);
+});
+
+
+test("reeling cannot pull a frog through another body pinned against terrain", () => {
+  const { game, a, b } = contactArena();
+  game.state.platforms.push({ id: "wall", x: 500, y: 800, w: 80, h: 200 });
+  b.x = 500 - PLAYER_RADIUS;
+  a.x = b.x - PLAYER_RADIUS * 2;
+  a.rope = { x: 500, y: a.y, length: 54, bends: [] };
+  game.setInput(a.id, input({ up: true }));
+  for (let frame = 0; frame < 120; frame++) {
+    game.step(FIXED_STEP);
+    assert.ok(b.x - a.x >= PLAYER_RADIUS * 2 - 0.15);
+    assert.ok(b.x <= 500 - PLAYER_RADIUS + 0.01);
+  }
+  assert.ok(a.rope);
+});
+
+
+test("a short drop supports climbing onto a frog without triggering a stomp", () => {
+  const { game, a, b } = contactArena();
+  const originalX = b.x;
+  Object.assign(a, { x: b.x, y: b.y - 95, grounded: false });
+  advance(game, 0.8);
+  assert.equal(b.tumble, 0);
+  assert.equal(b.x, originalX);
+  assert.equal(a.grounded, true);
+  assert.ok(Math.abs(b.y - a.y - PLAYER_RADIUS * 2) < 0.15);
 });

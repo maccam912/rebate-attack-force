@@ -9,11 +9,13 @@ import type {
   WeaponId,
 } from "./types.js";
 
+import { ropeFixedLength, ropePathLength, updateRopePath } from "./rope.js";
+
 export type * from "./types.js";
 
-export const WIDTH = 1440;
-export const HEIGHT = 850;
-export const WATER_Y = 780;
+export const WIDTH = 4320;
+export const HEIGHT = 1800;
+export const WATER_Y = 1730;
 export const PLAYER_RADIUS = 18;
 export const FIXED_STEP = 1 / 120;
 export const GRAPPLE_RANGE = 680;
@@ -22,6 +24,8 @@ export const RETREAT_SECONDS = 10;
 
 const GRAVITY = 1050;
 const MAX_SPEED = 1100;
+// A normal jump can land on a frog; a longer fall becomes a stomp.
+const STOMP_SPEED = 560;
 const COLORS = ["#9fe870", "#ffb86b", "#b9a2ff", "#71dce4"];
 const WEAPONS: WeaponId[] = ["rocket", "grenade", "pulse"];
 const clamp = (value: number, low: number, high: number) =>
@@ -37,16 +41,44 @@ const blankInput = (): PlayerInput => ({
   aimY: HEIGHT / 2,
 });
 
+export const SPAWNS = [
+  { x: 220, y: 1600 - PLAYER_RADIUS },
+  { x: 4000, y: 1600 - PLAYER_RADIUS },
+  { x: 1300, y: 1480 - PLAYER_RADIUS },
+  { x: 2990, y: 1460 - PLAYER_RADIUS },
+];
+
 export function makePlatforms(): Platform[] {
   return [
-    { id: "west-island", x: 60, y: 650, w: 550, h: 200 },
-    { id: "east-island", x: 830, y: 650, w: 550, h: 200 },
-    { id: "stepping-stone", x: 630, y: 690, w: 180, h: 160 },
-    { id: "west-shelf", x: 300, y: 450, w: 240, h: 34 },
-    { id: "east-shelf", x: 900, y: 450, w: 240, h: 34 },
-    { id: "lookout", x: 600, y: 290, w: 240, h: 32 },
-    { id: "west-bar", x: 120, y: 190, w: 280, h: 25 },
-    { id: "east-bar", x: 1040, y: 190, w: 280, h: 25 },
+    { id: "west-island", x: 60, y: 1600, w: 720, h: 200 },
+    { id: "east-island", x: 3540, y: 1600, w: 720, h: 200 },
+    { id: "foundry", x: 1060, y: 1480, w: 680, h: 320 },
+    { id: "stepping-stone", x: 2050, y: 1600, w: 480, h: 200 },
+    { id: "quarry", x: 2750, y: 1460, w: 480, h: 340 },
+    { id: "west-shelf", x: 300, y: 1400, w: 280, h: 34 },
+    { id: "west-bar", x: 100, y: 1130, w: 300, h: 28 },
+    { id: "west-bridge", x: 650, y: 1170, w: 260, h: 34 },
+    { id: "west-canopy", x: 480, y: 900, w: 280, h: 34 },
+    { id: "west-tower", x: 60, y: 660, w: 320, h: 28 },
+    { id: "west-summit", x: 540, y: 390, w: 320, h: 34 },
+    { id: "foundry-shelf", x: 1130, y: 1210, w: 280, h: 36 },
+    { id: "foundry-bar", x: 990, y: 930, w: 240, h: 34 },
+    { id: "lookout", x: 1440, y: 720, w: 260, h: 32 },
+    { id: "high-bridge", x: 1060, y: 450, w: 280, h: 32 },
+    { id: "summit", x: 1550, y: 210, w: 380, h: 36 },
+    { id: "central-shelf", x: 1740, y: 1080, w: 260, h: 38 },
+    { id: "central-step", x: 2170, y: 1330, w: 300, h: 34 },
+    { id: "central-canopy", x: 2140, y: 800, w: 280, h: 36 },
+    { id: "central-tower", x: 1970, y: 480, w: 300, h: 34 },
+    { id: "east-summit", x: 2460, y: 280, w: 300, h: 32 },
+    { id: "quarry-bar", x: 2700, y: 650, w: 300, h: 34 },
+    { id: "quarry-step", x: 2590, y: 1080, w: 260, h: 34 },
+    { id: "quarry-shelf", x: 3040, y: 1220, w: 280, h: 34 },
+    { id: "east-bridge", x: 3240, y: 930, w: 300, h: 34 },
+    { id: "east-tower", x: 3190, y: 440, w: 280, h: 34 },
+    { id: "east-canopy", x: 3760, y: 680, w: 300, h: 34 },
+    { id: "east-bar", x: 3830, y: 1130, w: 300, h: 28 },
+    { id: "east-shelf", x: 3690, y: 1400, w: 280, h: 34 },
   ];
 }
 
@@ -74,19 +106,19 @@ export class GameEngine {
         name: "Target",
         color: COLORS[1],
       });
-    const spawnX = [160, 1280, 450, 990];
     const players: Player[] = definitions.map((definition, index) => ({
       id: definition.id,
       name: definition.name,
       color: definition.color ?? COLORS[index]!,
-      x: spawnX[index]!,
-      y: 650 - PLAYER_RADIUS,
+      ...SPAWNS[index]!,
       vx: 0,
       vy: 0,
       hp: 100,
       alive: true,
       grounded: true,
       rope: null,
+      rotation: 0,
+      tumble: 0,
       inventory: { rocket: 0, grenade: 0, pulse: 0 },
       weapon: null,
       hasCrate: false,
@@ -172,6 +204,7 @@ export class GameEngine {
           x: hit.x,
           y: hit.y,
           length: Math.max(40, hit.distance),
+          bends: [],
         };
         return true;
       }
@@ -244,6 +277,16 @@ export class GameEngine {
         dt,
         isActive,
       );
+    }
+    this.resolvePlayerContacts();
+    for (const player of this.state.players) {
+      if (!player.alive) continue;
+      // Contact separation wins if another body blocks a taut rope.
+      if (player.rope) {
+        if (updateRopePath(player.rope, player, this.state.platforms))
+          player.rope.length = Math.max(player.rope.length, ropePathLength(player.rope, player));
+        else player.rope = null;
+      }
       if (player.y + PLAYER_RADIUS >= WATER_Y) this.kill(player);
     }
     this.updateProjectiles(dt);
@@ -307,8 +350,8 @@ export class GameEngine {
     if (axis) {
       const acceleration = player.rope ? 990 : wasGrounded ? 1800 : 520;
       player.vx += axis * acceleration * dt;
-      if (wasGrounded && !player.rope) player.vx = clamp(player.vx, -245, 245);
-    } else if (wasGrounded) player.vx *= Math.exp(-10 * dt);
+      if (wasGrounded && !player.rope && player.tumble <= 0) player.vx = clamp(player.vx, -245, 245);
+    } else if (wasGrounded) player.vx *= Math.exp(-(player.tumble > 0 ? 1.3 : 10) * dt);
     else player.vx *= Math.exp(-0.1 * dt);
 
     player.vy += GRAVITY * dt;
@@ -324,26 +367,102 @@ export class GameEngine {
     player.grounded = false;
     this.movePlayer(player, player.vx * dt, player.vy * dt);
 
-    if (player.rope) {
-      const dx = player.x - player.rope.x;
-      const dy = player.y - player.rope.y;
+    if (player.tumble > 0) {
+      player.tumble = Math.max(0, player.tumble - dt);
+      const angle = player.rotation + player.vx * dt / PLAYER_RADIUS;
+      player.rotation = Math.atan2(Math.sin(angle), Math.cos(angle));
+    } else player.rotation *= Math.exp(-14 * dt);
+    this.constrainRope(player);
+  }
+
+  private constrainRope(player: Player): void {
+    const rope = player.rope;
+    if (!rope) return;
+    for (let iteration = 0; iteration < 3; iteration++) {
+      if (!updateRopePath(rope, player, this.state.platforms)) {
+        player.rope = null;
+        return;
+      }
+      const pivot = rope.bends.at(-1) ?? rope;
+      const freeLength = Math.max(PLAYER_RADIUS + 2, rope.length - ropeFixedLength(rope));
+      const dx = player.x - pivot.x;
+      const dy = player.y - pivot.y;
       const distance = Math.hypot(dx, dy);
-      if (distance > player.rope.length && distance > 0) {
-        const nx = dx / distance;
-        const ny = dy / distance;
-        const correction = distance - player.rope.length;
-        this.movePlayer(player, -nx * correction, -ny * correction);
-        const radialVelocity = player.vx * nx + player.vy * ny;
-        if (radialVelocity > 0) {
-          player.vx -= nx * radialVelocity;
-          player.vy -= ny * radialVelocity;
+      if (distance <= freeLength + 0.001) break;
+      const nx = dx / distance;
+      const ny = dy / distance;
+      const previousY = player.y;
+      this.movePlayer(player, -nx * (distance - freeLength), -ny * (distance - freeLength));
+      if (player.y < previousY - 0.01) player.grounded = false;
+      const radialVelocity = player.vx * nx + player.vy * ny;
+      if (radialVelocity > 0) {
+        player.vx -= nx * radialVelocity;
+        player.vy -= ny * radialVelocity;
+      }
+    }
+    if (!updateRopePath(rope, player, this.state.platforms)) {
+      player.rope = null;
+      return;
+    }
+    // If a solid blocks reeling, pay out the actual routed length.
+    rope.length = Math.max(rope.length, ropePathLength(rope, player));
+  }
+
+  /** Equal-mass circular bodies: terrain takes priority over separation. */
+  private resolvePlayerContacts(): void {
+    const players = this.state.players.filter((p) => p.alive);
+    for (let iteration = 0; iteration < 8; iteration++) {
+      for (let i = 0; i < players.length; i++) {
+        for (let j = i + 1; j < players.length; j++) {
+          const a = players[i];
+          const b = players[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const distance = Math.hypot(dx, dy);
+          if (distance > PLAYER_RADIUS * 2 + 0.1) continue;
+          const nx = distance > 0.001 ? dx / distance : 1;
+          const ny = distance > 0.001 ? dy / distance : 0;
+          const closing = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+          const overlap = Math.max(0, PLAYER_RADIUS * 2 - distance);
+          const ax = a.x, ay = a.y, bx = b.x, by = b.y;
+          this.movePlayer(a, -nx * overlap / 2, -ny * overlap / 2);
+          this.movePlayer(b, nx * overlap / 2, ny * overlap / 2);
+          // Transfer the unused correction when a wall or floor pins one body.
+          const movedA = (ax - a.x) * nx + (ay - a.y) * ny;
+          const movedB = (b.x - bx) * nx + (b.y - by) * ny;
+          if (movedA < overlap / 2 - 0.001)
+            this.movePlayer(b, nx * (overlap / 2 - movedA), ny * (overlap / 2 - movedA));
+          if (movedB < overlap / 2 - 0.001)
+            this.movePlayer(a, -nx * (overlap / 2 - movedB), -ny * (overlap / 2 - movedB));
+          if (closing < 0) {
+            const impulse = -closing * 0.54;
+            a.vx -= impulse * nx;
+            a.vy -= impulse * ny;
+            b.vx += impulse * nx;
+            b.vy += impulse * ny;
+            if (Math.abs(ny) > 0.55 && closing < -STOMP_SPEED) {
+              const upper = ny > 0 ? a : b;
+              const lower = ny > 0 ? b : a;
+              const direction = Math.sign(lower.x - upper.x) || Math.sign(upper.vx) || 1;
+              lower.vx += direction * Math.min(570, -closing * 0.7);
+              lower.vy = Math.min(lower.vy, -Math.min(260, -closing * 0.28));
+              upper.vy = Math.min(upper.vy, -Math.min(210, -closing * 0.22));
+              lower.grounded = false;
+              upper.grounded = false;
+              lower.tumble = 1.8;
+              lower.rope = null;
+            } else if (Math.abs(ny) < 0.55 && closing < -260) {
+              a.tumble = b.tumble = 1.1;
+            }
+          }
+          if (ny > 0.55 && a.vy >= b.vy && b.grounded) {
+            a.grounded = true;
+            a.vy = b.vy;
+          } else if (ny < -0.55 && b.vy >= a.vy && a.grounded) {
+            b.grounded = true;
+            b.vy = a.vy;
+          }
         }
-        // A solid ledge may block the reel's correction. Pay out enough rope to
-        // keep its physical length valid instead of pulling through terrain.
-        player.rope.length = Math.max(
-          player.rope.length,
-          Math.hypot(player.x - player.rope.x, player.y - player.rope.y),
-        );
       }
     }
   }
@@ -608,8 +727,10 @@ export class GameEngine {
     if (this.state.mode === "practice") {
       this.state.players.forEach((player, index) => {
         if (!player.alive) {
-          player.x = [160, 1280, 450, 990][index]!;
-          player.y = 650 - PLAYER_RADIUS;
+          player.x = SPAWNS[index]!.x;
+          player.y = SPAWNS[index]!.y;
+          player.rotation = 0;
+          player.tumble = 0;
           player.vx = 0;
           player.vy = 0;
           player.hp = 100;
@@ -685,19 +806,12 @@ export class GameEngine {
             ? "rocket"
             : WEAPONS[Math.floor(this.random() * WEAPONS.length)]!,
       },
-      {
+      ...this.state.platforms.filter((p) => p.h < 100).map((p, index) => ({
         id: this.id("crate"),
-        x: 420,
-        y: 450 - PLAYER_RADIUS,
-        weapon: "grenade",
-      },
-      {
-        id: this.id("crate"),
-        x: 1020,
-        y: 450 - PLAYER_RADIUS,
-        weapon: "rocket",
-      },
-      { id: this.id("crate"), x: 720, y: 290 - PLAYER_RADIUS, weapon: "pulse" },
+        x: p.x + p.w / 2,
+        y: p.y - PLAYER_RADIUS,
+        weapon: WEAPONS[(index + 1) % WEAPONS.length]!,
+      })),
     ];
   }
 

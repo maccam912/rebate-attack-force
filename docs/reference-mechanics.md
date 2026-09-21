@@ -39,6 +39,6 @@ The user explicitly requested persistent ammunition as an adaptation: unused amm
 
 Keep the movement responsive: preserve tangential release momentum, let players shorten/lengthen the rope, let pumping add energy, and allow rapid reattachment. Provide clear on-screen controls plus a practice mode. Show ammunition and explicitly lock firing when ammunition is empty; do not make players learn an unwritten etiquette rule.
 
-Start with three distinct original weapons: a direct explosive projectile, a bouncing timed explosive, and a close-range knockback attack. Tune damage, blast radius, and water elimination for this implementation rather than claiming numerical fidelity. Terrain destruction, rope wrapping around corners, full weapon parity, and large teams can follow after the traversal/combat loop is fun.
+Start with three distinct original weapons: a direct explosive projectile, a bouncing timed explosive, and a close-range knockback attack. Tune damage, blast radius, and water elimination for this implementation rather than claiming numerical fidelity. Terrain destruction, full weapon parity, and large teams remain outside the current scope. Rebate Attack Force now adds terrain-corner rope wrapping and solid frog bodies with landing knockback, alongside its larger scrolling arena.
 
 Use original code-drawn characters, arena geometry, UI, branding, and effects. Separately licensed CC0 audio is acceptable. Do not extract, trace, or redistribute the reference game's distinctive assets or level designs.
