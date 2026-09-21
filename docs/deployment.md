@@ -22,6 +22,25 @@ docker run --rm -p 2567:2567 rebate-attack-force:0.1.0
 
 Open `http://localhost:2567`. The image runs as a non-root user and includes only production dependencies and built client files plus the TypeScript server/shared engine. `tsx` is a production dependency. The process handles `SIGTERM`/`SIGINT`, marks readiness unavailable, and closes rooms and sockets through Colyseus' graceful shutdown API.
 
+## GitHub Actions and OCI GitOps
+
+`.github/workflows/image.yml` tests and builds pull requests. Pushes to `main`
+(and manual runs on `main`) publish `ghcr.io/maccam912/rebate-attack-force:latest`
+and `sha-<full-commit>` tags for Linux AMD64 and ARM64 using `GITHUB_TOKEN`.
+The existing Dockerfile packages both the browser client and Colyseus server.
+
+The `fleet-infra` repository enables this app under `clusters/oci-koski/apps`
+at **https://rebate-attack-force.oci.koski.co**. Its Flux image policy tracks the
+`latest` digest and commits image updates to `fleet-infra/main`, triggering a
+single-replica `Recreate` rollout. Each rollout ends active matches.
+
+After the first publish, ensure the GHCR package is public so the cluster and
+Flux image reflector can pull anonymously. Private packages require registry
+credentials for both. Flux's existing Git credentials must allow image-update
+commits. DNS for the hostname must resolve to the OCI ingress; cert-manager uses
+the existing `letsencrypt` ClusterIssuer for TLS. Both repositories' changes
+must reach `main` before this pipeline takes effect.
+
 ## Kubernetes
 
 Build and push the image to your registry, then set its name/tag in `deploy/base/kustomization.yaml`. For example, use `newName: registry.example.com/games/rebate-attack-force` under the existing image entry. Create registry credentials in your cluster if needed.
