@@ -1,6 +1,18 @@
 export type WeaponId = "rocket" | "grenade" | "pulse";
 export type GameMode = "practice" | "versus";
-export type GamePhase = "playing" | "retreat" | "settling" | "finished";
+export type GamePhase = "playing" | "retreat" | "settling" | "waiting" | "finished";
+
+export interface TeamSettings {
+  frogs: number;
+  hp: number;
+}
+
+export interface Team extends TeamSettings {
+  id: string;
+  name: string;
+  color: string;
+  connected: boolean;
+}
 
 export interface Platform {
   id: string;
@@ -31,6 +43,8 @@ export interface Rope extends Point {
 
 export interface Player {
   id: string;
+  teamId: string;
+  number: number;
   name: string;
   color: string;
   x: number;
@@ -38,8 +52,11 @@ export interface Player {
   vx: number;
   vy: number;
   hp: number;
+  maxHp: number;
+  facing: -1 | 1;
   alive: boolean;
   grounded: boolean;
+  lookAt: Point;
   rope: Rope | null;
   rotation: number;
   tumble: number;
@@ -82,10 +99,12 @@ export interface GameState {
   waterY: number;
   platforms: Platform[];
   players: Player[];
+  teams: Team[];
   crates: Crate[];
   projectiles: Projectile[];
   explosions: Explosion[];
   activePlayerId: string;
+  activeTeamId: string;
   phase: GamePhase;
   turn: number;
   timeLeft: number;
@@ -95,13 +114,13 @@ export interface GameState {
 }
 
 export type GameCommand = {
-  type: "jump" | "grapple" | "release" | "fire" | "endTurn" | "selectWeapon";
+  type: "jump" | "backflip" | "grapple" | "release" | "fire" | "endTurn" | "selectWeapon";
   power?: number;
   weapon?: WeaponId;
 };
 
 export interface GameOptions {
-  players?: { id: string; name: string; color?: string }[];
+  players?: { id: string; name: string; color?: string; frogs?: number; hp?: number; connected?: boolean }[];
   mode?: GameMode;
   seed?: number;
 }

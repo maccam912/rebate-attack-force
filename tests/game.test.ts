@@ -86,6 +86,26 @@ test("inactive and unknown players cannot move, jump, end turns, or attack", () 
   assert.equal(game.state.turn, 1);
 });
 
+test("gaze follows validated active input and survives a turn handoff", () => {
+  const game = new GameEngine();
+  const [first, second] = game.state.players;
+  const originalSecondLook = { ...second.lookAt };
+  game.setInput(first.id, input({ aimX: 500, aimY: 1200 }));
+  assert.deepEqual(first.lookAt, { x: 500, y: 1200 });
+  game.setInput(first.id, input({ aimX: NaN, aimY: Infinity }));
+  assert.deepEqual(first.lookAt, { x: 500, y: 1200 }, "bad coordinates retain the last valid gaze");
+  game.setInput(second.id, input({ aimX: 0, aimY: 0 }));
+  assert.deepEqual(second.lookAt, originalSecondLook, "waiting players cannot change their gaze");
+  assert.deepEqual(JSON.parse(JSON.stringify(game.state)).players[0].lookAt, first.lookAt);
+  game.command(first.id, { type: "endTurn" });
+  advance(game, 0.1);
+  assert.equal(game.state.activePlayerId, second.id);
+  game.setInput(first.id, input({ aimX: 0, aimY: 0 }));
+  assert.deepEqual(first.lookAt, { x: 500, y: 1200 });
+  game.setInput(second.id, input({ aimX: 3300, aimY: 1400 }));
+  assert.deepEqual(second.lookAt, { x: 3300, y: 1400 });
+});
+
 test("grapple raycast catches solid geometry, reels in, and release preserves momentum", () => {
   const game = new GameEngine();
   const player = game.state.players[0]!;

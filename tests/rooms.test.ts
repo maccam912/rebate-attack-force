@@ -100,6 +100,17 @@ test(
     );
     assert.equal(a.state!.activePlayerId, a.room.sessionId);
     assert.equal(b.state!.activePlayerId, a.room.sessionId);
+    a.room.send("input", {
+      left: false, right: false, up: false, down: false,
+      aimX: 600, aimY: 1200,
+    });
+    await waitFor(
+      () => [a, b, c].every((client) => client.state!.players[0].lookAt.x === 600 && client.state!.players[0].lookAt.y === 1200),
+      "the active player's gaze reaches every client",
+    );
+    const gazeSnapshot = a.snapshots;
+    await waitFor(() => a.snapshots >= gazeSnapshot + 25, "input timeout leaves gaze intact");
+    assert.deepEqual(b.state!.players[0].lookAt, { x: 600, y: 1200 });
     await assert.rejects(
       () => new Client(endpoint).joinById(a.room.roomId, { name: "Late" }),
       /locked|already started/i,
@@ -125,6 +136,7 @@ test(
       "server advances snapshots",
     );
     assert.equal(a.state!.activePlayerId, a.room.sessionId);
+    assert.deepEqual(a.state!.players[0].lookAt, { x: 600, y: 1200 }, "inactive input cannot redirect the active frog's eyes");
     assert.equal(
       a.state!.projectiles.length,
       0,
@@ -279,3 +291,76 @@ test(
     ]);
   },
 );
+
+test("host configures teams; rejoining from a fresh client restores the same team and skips offline turns", { timeout: 15000 }, async () => {
+  const a = await create("Captain");
+  const b = await join(a.room.roomId, "Visitor");
+  await waitFor(() => a.lobby?.players.length === 2, "two team lobby");
+  b.room.send("teamSettings", { teamId: a.room.sessionId, frogs: 6, hp: 500 });
+  await waitFor(() => b.notices.length === 1, "guest cannot configure teams");
+  assert.equal(a.lobby!.players[0].frogs, 1);
+  for (const settings of [{ frogs: -1, hp: 100 }, { frogs: 7, hp: 100 },
+    { frogs: 2, hp: Infinity }, { frogs: 2, hp: 0 }, { frogs: 2.5, hp: 100 }]) {
+    a.room.send("teamSettings", { teamId: a.room.sessionId, ...settings });
+  }
+  await waitFor(() => a.notices.length === 5, "invalid settings rejected");
+  a.room.send("teamSettings", { teamId: a.room.sessionId, frogs: 3, hp: 175 });
+  a.room.send("teamSettings", { teamId: b.room.sessionId, frogs: 2, hp: 250 });
+  await waitFor(() => b.lobby?.players[0].frogs === 3 && b.lobby?.players[1].hp === 250, "settings broadcast to both clients");
+  a.room.send("start");
+  await waitFor(() => !!a.state && !!b.state, "configured match");
+  assert.equal(a.state!.players.length, 5);
+  assert.ok(a.state!.players.filter((p) => p.teamId === a.room.sessionId).every((p) => p.hp === 175));
+  assert.ok(a.state!.players.filter((p) => p.teamId === b.room.sessionId).every((p) => p.hp === 250));
+  a.room.send("teamSettings", { teamId: a.room.sessionId, frogs: 1, hp: 1 });
+  await waitFor(() => a.notices.length === 6, "settings frozen after start");
+
+  const hostId = a.room.sessionId;
+  const visitorId = b.room.sessionId;
+  const firstToken = a.room.reconnectionToken;
+  a.room.reconnection.enabled = false;
+  a.room.connection.close();
+  await waitFor(() => b.state!.activeTeamId === visitorId && b.lobby!.hostId === visitorId, "offline host skipped and host migrates");
+  assert.equal(b.lobby!.players.find((p) => p.id === hostId)!.connected, false);
+  assert.ok(b.state!.players.every((p) => p.alive));
+  assert.equal(b.state!.phase, "playing", "disconnect is not a win");
+  b.room.send("command", { type: "endTurn" });
+  await waitFor(() => b.state!.activePlayerId === `${visitorId}:frog-2`, "connected team rotates while host is offline");
+  await assert.rejects(() => new Client(endpoint).reconnect(`${a.room.roomId}:invalid-token`));
+  const restored = observe(await new Client(endpoint).reconnect(firstToken));
+  await waitFor(() => restored.state?.teams.find((t) => t.id === hostId)?.connected === true, "saved seat restored by fresh client");
+  assert.equal(restored.room.sessionId, hostId);
+  assert.notEqual(restored.room.reconnectionToken, firstToken);
+  assert.equal(restored.state!.activePlayerId, `${visitorId}:frog-2`);
+  assert.equal(restored.state!.players.length, 5);
+  b.room.send("command", { type: "endTurn" });
+  await waitFor(() => restored.state!.activePlayerId === `${hostId}:frog-2`, "rejoined team controls its next living frog");
+  const secondFrog = restored.state!.players.find((p) => p.id === `${hostId}:frog-2`)!;
+  const originalX = secondFrog.x;
+  restored.room.send("input", { left: true, right: false, up: false, down: false, aimX: 20, aimY: 400 });
+  await waitFor(() => restored.state!.players.find((p) => p.id === secondFrog.id)!.x < originalX - 4, "seat authorizes movement of a different frog");
+  restored.room.send("input", { left: false, right: false, up: false, down: false, aimX: 20, aimY: 400 });
+  restored.room.send("command", { type: "jump" });
+  restored.room.send("command", { type: "backflip" });
+  await waitFor(() => restored.state!.players.find((p) => p.id === secondFrog.id)!.vy < -600, "authoritative backward jump");
+
+  const secondToken = restored.room.reconnectionToken;
+  const visitorToken = b.room.reconnectionToken;
+  restored.room.reconnection.enabled = false;
+  b.room.reconnection.enabled = false;
+  restored.room.connection.close();
+  b.room.connection.close();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const bothBack = observe(await new Client(endpoint).reconnect(secondToken));
+  await waitFor(() => !!bothBack.state, "empty room retains recoverable seats");
+  assert.equal(bothBack.room.sessionId, hostId);
+  assert.ok(bothBack.state!.players.every((p) => p.alive));
+  assert.equal(bothBack.state!.winnerId, null);
+  const visitorBack = observe(await new Client(endpoint).reconnect(visitorToken));
+  await waitFor(() => bothBack.lobby!.players.every((p) => p.connected), "both seats recovered");
+  await bothBack.room.leave();
+  await waitFor(() => visitorBack.state!.phase === "finished", "explicit leave forfeits the entire team");
+  assert.equal(visitorBack.state!.winnerId, visitorId);
+  assert.equal(visitorBack.state!.players.filter((p) => p.teamId === hostId && p.alive).length, 0);
+  await visitorBack.room.leave();
+});

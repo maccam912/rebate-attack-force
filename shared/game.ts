@@ -5,11 +5,13 @@ import type {
   Platform,
   Player,
   PlayerInput,
+  Point,
   Projectile,
   WeaponId,
 } from "./types.js";
 
 import { ropeFixedLength, ropePathLength, updateRopePath } from "./rope.js";
+import { teamSettings } from "./settings.js";
 
 export type * from "./types.js";
 
@@ -21,6 +23,7 @@ export const FIXED_STEP = 1 / 120;
 export const GRAPPLE_RANGE = 680;
 export const TURN_SECONDS = 45;
 export const RETREAT_SECONDS = 10;
+export const DOUBLE_JUMP_SECONDS = 0.32;
 
 const GRAVITY = 1050;
 const MAX_SPEED = 1100;
@@ -32,13 +35,15 @@ const clamp = (value: number, low: number, high: number) =>
   Math.max(low, Math.min(high, value));
 const finite = (value: unknown, fallback: number) =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
-const blankInput = (): PlayerInput => ({
+const blankInput = (
+  lookAt: Point = { x: WIDTH / 2, y: HEIGHT / 2 },
+): PlayerInput => ({
   left: false,
   right: false,
   up: false,
   down: false,
-  aimX: WIDTH / 2,
-  aimY: HEIGHT / 2,
+  aimX: lookAt.x,
+  aimY: lookAt.y,
 });
 
 export const SPAWNS = [
@@ -47,6 +52,13 @@ export const SPAWNS = [
   { x: 1300, y: 1480 - PLAYER_RADIUS },
   { x: 2990, y: 1460 - PLAYER_RADIUS },
 ];
+
+function frogSpawn(teamIndex: number, frogIndex: number): Point {
+  const spawn = SPAWNS[teamIndex]!;
+  const direction = teamIndex === 1 || teamIndex === 3 ? -1 : 1;
+  // The quarry's shorter starting ledge needs tighter spacing for six frogs.
+  return { x: spawn.x + direction * frogIndex * (teamIndex === 3 ? 42 : 64), y: spawn.y };
+}
 
 export function makePlatforms(): Platform[] {
   return [
@@ -90,6 +102,9 @@ export class GameEngine {
   private serial = 0;
   private randomSeed: number;
   private settlingTime = 0;
+  private elapsed = 0;
+  private jump: { id: string; at: number; facing: -1 | 1 } | null = null;
+  private lastFrog = new Map<string, string>();
 
   constructor(options: GameOptions = {}) {
     this.randomSeed = finite(options.seed, 7351) >>> 0 || 1;
@@ -106,33 +121,53 @@ export class GameEngine {
         name: "Target",
         color: COLORS[1],
       });
-    const players: Player[] = definitions.map((definition, index) => ({
+    const teams = definitions.map((definition, index) => ({
       id: definition.id,
       name: definition.name,
       color: definition.color ?? COLORS[index]!,
-      ...SPAWNS[index]!,
-      vx: 0,
-      vy: 0,
-      hp: 100,
-      alive: true,
-      grounded: true,
-      rope: null,
-      rotation: 0,
-      tumble: 0,
-      inventory: { rocket: 0, grenade: 0, pulse: 0 },
-      weapon: null,
-      hasCrate: false,
+      connected: definition.connected !== false,
+      ...teamSettings({ frogs: definition.frogs ?? 1, hp: definition.hp ?? 100 }),
     }));
+    const players: Player[] = teams.flatMap((team, index) =>
+      Array.from({ length: team.frogs }, (_, frog): Player => {
+        const spawn = frogSpawn(index, frog);
+        return {
+          id: frog === 0 ? team.id : `${team.id}:frog-${frog + 1}`,
+          teamId: team.id,
+          number: frog + 1,
+          name: team.frogs === 1 ? team.name : `${team.name} ${frog + 1}`,
+          color: team.color,
+          ...spawn,
+          vx: 0,
+          vy: 0,
+          hp: team.hp,
+          maxHp: team.hp,
+          facing: spawn.x < WIDTH / 2 ? 1 : -1,
+          alive: true,
+          grounded: true,
+          lookAt: { x: spawn.x + 200, y: spawn.y - 220 },
+          rope: null,
+          rotation: 0,
+          tumble: 0,
+          inventory: { rocket: 0, grenade: 0, pulse: 0 },
+          weapon: null,
+          hasCrate: false,
+        };
+      }));
+    const firstTeam = teams.find((team) => team.connected) ?? teams[0]!;
+    const firstFrog = players.find((player) => player.teamId === firstTeam.id)!;
     this.state = {
       width: WIDTH,
       height: HEIGHT,
       waterY: WATER_Y,
       platforms: makePlatforms(),
       players,
+      teams,
       crates: [],
       projectiles: [],
       explosions: [],
-      activePlayerId: players[0]!.id,
+      activePlayerId: firstFrog.id,
+      activeTeamId: firstTeam.id,
       phase: "playing",
       turn: 1,
       timeLeft: options.mode === "practice" ? 90 : TURN_SECONDS,
@@ -140,37 +175,59 @@ export class GameEngine {
       winnerId: null,
       message: "Grab a crate. Make your shot. Get out of the way.",
     };
-    players.forEach((player) => this.inputs.set(player.id, blankInput()));
+    players.forEach((player) => this.inputs.set(player.id, blankInput(player.lookAt)));
+    if (firstTeam.connected) this.lastFrog.set(firstTeam.id, firstFrog.id);
     this.spawnCrates();
+    if (!firstTeam.connected) this.beginSettling();
   }
 
   setInput(id: string, input: PlayerInput): void {
+    const player = this.state.players.find((candidate) => candidate.id === id);
     if (
+      !player?.alive ||
       id !== this.state.activePlayerId ||
       !this.canMove() ||
       !input ||
       typeof input !== "object"
     )
       return;
-    const prior = this.inputs.get(id) ?? blankInput();
-    this.inputs.set(id, {
+    const prior = this.inputs.get(id) ?? blankInput(player.lookAt);
+    const next = {
       left: input.left === true,
       right: input.right === true,
       up: input.up === true,
       down: input.down === true,
       aimX: clamp(finite(input.aimX, prior.aimX), -WIDTH, WIDTH * 2),
       aimY: clamp(finite(input.aimY, prior.aimY), -HEIGHT, HEIGHT * 2),
-    });
+    };
+    this.inputs.set(id, next);
+    player.lookAt = { x: next.aimX, y: next.aimY };
   }
 
-  /** Departed room members are eliminated without transferring authority to a client. */
+  /** Explicit departures forfeit the team; accidental drops use setTeamConnected. */
   removePlayer(id: string): void {
-    const player = this.state.players.find((candidate) => candidate.id === id);
-    if (!player?.alive || this.state.phase === "finished") return;
-    this.kill(player);
-    this.inputs.delete(id);
-    if (id === this.state.activePlayerId) this.beginSettling();
+    if (this.state.phase === "finished") return;
+    for (const player of this.state.players.filter((p) => p.teamId === id)) {
+      if (player.alive) this.kill(player);
+      this.inputs.delete(player.id);
+    }
+    const team = this.state.teams.find((team) => team.id === id);
+    if (team) team.connected = false;
+    if (id === this.state.activeTeamId) this.beginSettling();
     this.tick(FIXED_STEP);
+  }
+
+  setTeamConnected(id: string, connected: boolean): void {
+    const team = this.state.teams.find((team) => team.id === id);
+    if (!team || team.connected === connected) return;
+    team.connected = connected;
+    if (!connected) {
+      for (const player of this.state.players.filter((p) => p.teamId === id)) {
+        this.inputs.delete(player.id);
+        player.rope = null;
+      }
+      if (id === this.state.activeTeamId && this.canMovePhase()) this.beginSettling();
+    }
   }
 
   command(id: string, command: GameCommand): boolean {
@@ -186,8 +243,18 @@ export class GameEngine {
     switch (command.type) {
       case "jump":
         if (!player.grounded) return false;
+        if (input.left !== input.right) player.facing = input.right ? 1 : -1;
+        this.jump = { id, at: this.elapsed, facing: player.facing };
         player.vy = -525;
         player.grounded = false;
+        return true;
+      case "backflip":
+        if (!this.jump || this.jump.id !== id || player.grounded ||
+          this.elapsed - this.jump.at > DOUBLE_JUMP_SECONDS) return false;
+        player.vy = -760;
+        player.vx = -this.jump.facing * 310;
+        player.rope = null;
+        this.jump = null;
         return true;
       case "grapple": {
         const direction = this.aim(player, input);
@@ -255,10 +322,16 @@ export class GameEngine {
   }
 
   private canMove(): boolean {
+    return this.canMovePhase() && this.state.teams.some(
+      (team) => team.id === this.state.activeTeamId && team.connected);
+  }
+
+  private canMovePhase(): boolean {
     return this.state.phase === "playing" || this.state.phase === "retreat";
   }
 
   private tick(dt: number): void {
+    this.elapsed += dt;
     this.state.explosions.forEach((explosion) => {
       explosion.age += dt;
     });
@@ -294,16 +367,16 @@ export class GameEngine {
 
     if (this.state.mode === "versus") {
       const survivors = this.state.players.filter((player) => player.alive);
-      if (survivors.length <= 1) {
+      const survivingTeams = new Set(survivors.map((player) => player.teamId));
+      if (survivingTeams.size <= 1) {
         // A killing blast can launch the apparent winner into the water, too.
         // Finish only after the surviving body and all shots have settled.
         if (this.state.phase !== "settling") this.beginSettling();
-        const survivor = survivors[0];
+        const survivor = this.state.teams.find((team) => survivingTeams.has(team.id));
         if (
           !survivor ||
           (this.state.projectiles.length === 0 &&
-            survivor.grounded &&
-            Math.hypot(survivor.vx, survivor.vy) < 42)
+            survivors.every((player) => player.grounded && Math.hypot(player.vx, player.vy) < 42))
         ) {
           this.state.phase = "finished";
           this.state.winnerId = survivor?.id ?? null;
@@ -314,6 +387,13 @@ export class GameEngine {
         }
         return;
       }
+    }
+
+    if (this.state.phase === "waiting") {
+      if (this.state.teams.some((team) => team.connected &&
+        this.state.players.some((player) => player.teamId === team.id && player.alive)))
+        this.nextTurn();
+      return;
     }
 
     const active = this.state.players.find(
@@ -348,6 +428,7 @@ export class GameEngine {
     const axis = Number(input.right) - Number(input.left);
     const wasGrounded = player.grounded;
     if (axis) {
+      player.facing = axis > 0 ? 1 : -1;
       const acceleration = player.rope ? 990 : wasGrounded ? 1800 : 520;
       player.vx += axis * acceleration * dt;
       if (wasGrounded && !player.rope && player.tumble <= 0) player.vx = clamp(player.vx, -245, 245);
@@ -713,6 +794,7 @@ export class GameEngine {
   }
 
   private beginSettling(): void {
+    this.jump = null;
     this.state.phase = "settling";
     this.state.timeLeft = 0;
     this.settlingTime = 0;
@@ -725,40 +807,56 @@ export class GameEngine {
 
   private nextTurn(): void {
     if (this.state.mode === "practice") {
-      this.state.players.forEach((player, index) => {
+      this.state.players.forEach((player) => {
         if (!player.alive) {
-          player.x = SPAWNS[index]!.x;
-          player.y = SPAWNS[index]!.y;
+          const index = this.state.teams.findIndex((team) => team.id === player.teamId);
+          Object.assign(player, frogSpawn(index, player.number - 1));
           player.rotation = 0;
           player.tumble = 0;
           player.vx = 0;
           player.vy = 0;
-          player.hp = 100;
+          player.hp = player.maxHp;
           player.alive = true;
           player.grounded = true;
+          player.lookAt = { x: player.x + 200, y: player.y - 220 };
         }
       });
       this.state.activePlayerId = this.state.players[0]!.id;
+      this.state.activeTeamId = this.state.players[0]!.teamId;
     } else {
-      const currentIndex = this.state.players.findIndex(
-        (player) => player.id === this.state.activePlayerId,
+      const currentIndex = this.state.teams.findIndex(
+        (team) => team.id === this.state.activeTeamId,
       );
-      for (let offset = 1; offset <= this.state.players.length; offset++) {
-        const player =
-          this.state.players[
-            (currentIndex + offset) % this.state.players.length
-          ]!;
-        if (player.alive) {
+      let selected = false;
+      for (let offset = 1; offset <= this.state.teams.length; offset++) {
+        const team = this.state.teams[(currentIndex + offset) % this.state.teams.length]!;
+        if (!team.connected) continue;
+        const frogs = this.state.players.filter((player) => player.teamId === team.id);
+        const last = frogs.findIndex((player) => player.id === this.lastFrog.get(team.id));
+        for (let next = 1; next <= frogs.length; next++) {
+          const player = frogs[(last + next) % frogs.length]!;
+          if (!player.alive) continue;
           this.state.activePlayerId = player.id;
+          this.state.activeTeamId = team.id;
+          this.lastFrog.set(team.id, player.id);
+          selected = true;
           break;
         }
+        if (selected) break;
+      }
+      if (!selected) {
+        this.state.phase = "waiting";
+        this.state.timeLeft = 0;
+        this.state.message = "Waiting for a team to reconnect…";
+        return;
       }
     }
+    this.jump = null;
     this.state.players.forEach((player) => {
       this.selectAvailableWeapon(player);
       player.hasCrate = player.alive && player.weapon !== null;
       player.rope = null;
-      this.inputs.set(player.id, blankInput());
+      this.inputs.set(player.id, blankInput(player.lookAt));
     });
     this.state.turn++;
     this.state.phase = "playing";

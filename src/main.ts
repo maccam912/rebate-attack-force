@@ -1,20 +1,23 @@
 import "./style.css";
-import { GameEngine } from "../shared/game";
+import { DOUBLE_JUMP_SECONDS, GameEngine } from "../shared/game";
 import type {
   GameState,
   PlayerInput,
   GameCommand,
   WeaponId,
+  TeamSettings,
 } from "../shared/types";
 import { renderGame } from "./renderer";
 import { followCamera, screenToWorld, type Camera } from "./camera";
-import { RoomConnection, type LobbyState } from "./network";
+import { RoomConnection, savedSeat, type LobbyState } from "./network";
+
+import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, validTeamSettings } from "../shared/settings";
 
 const logo = `<svg viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M5 30 17 8l16 5 15-3 11 22-8 22H17Z" fill="#cde47b"/><path d="M17 40c-5-17 5-24 15-18 11-7 22 3 17 18-9 10-24 10-32 0Z" fill="#18372a"/><circle cx="24" cy="27" r="5" fill="#e5ebbd"/><circle cx="41" cy="27" r="5" fill="#e5ebbd"/><circle cx="25" cy="27" r="2" fill="#18372a"/><circle cx="40" cy="27" r="2" fill="#18372a"/><path d="M27 38q6 5 12-1" stroke="#d0e77e" stroke-width="2" stroke-linecap="round"/><path d="m9 47-5 9 15-2M51 50l8 7 3-15" fill="#cde47b"/></svg>`;
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
 <main class="arena" id="arena" aria-label="Rebate Attack Force">
-  <canvas id="game" tabindex="0" aria-label="Scrapyard arena. A and D to move, W to jump, mouse and Space to grapple, 2 for weapons. Escape opens the menu."></canvas>
+  <canvas id="game" tabindex="0" aria-label="Scrapyard arena. A and D to move, Enter to jump, double Enter to jump higher and backward, mouse and Space to grapple, 2 for weapons. Escape opens the menu."></canvas>
   <div class="arena-top-tools">
     <button class="icon-button" id="menu-button" aria-label="Open game menu" aria-expanded="false">☰</button>
     <button class="icon-button" id="guide-button" aria-label="Field guide" title="Controls">?</button>
@@ -25,12 +28,12 @@ app.innerHTML = `
   <div class="hud" id="hud" hidden><div><div class="turn-player" id="turn-player"></div><div class="turn-caption" id="turn-caption"></div></div><div class="timer" id="timer"></div></div>
   <div class="objective-toast" id="objective-toast"></div>
   <div class="charging-indicator" id="charging" hidden>SHOT POWER<div class="power-meter"><div id="power-fill"></div></div></div>
-  <div class="arena-bottom"><div class="toolbelt"><button class="tool-button active" id="grapple-tool"><span class="key">1</span> Grapple</button><button class="tool-button" id="weapon-tool"><span class="key">2</span> <span id="weapon-tool-label">Find a crate</span></button><div class="inventory" id="inventory"></div></div><button class="end-turn" id="end-turn">End turn <span class="key">↵</span></button></div>
+  <div class="arena-bottom"><div class="toolbelt"><button class="tool-button active" id="grapple-tool"><span class="key">1</span> Grapple</button><button class="tool-button" id="weapon-tool"><span class="key">2</span> <span id="weapon-tool-label">Find a crate</span></button><div class="inventory" id="inventory"></div></div><button class="end-turn" id="end-turn">End turn</button></div>
   <div class="touch-controls" aria-label="Touch controls"><button data-hold="left" aria-label="Move left">←</button><button data-hold="right" aria-label="Move right">→</button><button id="touch-jump">Jump</button><button data-hold="up">Reel ↑</button><button data-hold="down" aria-label="Pay out rope">↓</button><button id="touch-hook">Hook</button></div>
   <div class="menu-backdrop" id="menu-overlay"><section class="panel menu-panel" aria-label="Game menu"><div class="menu-brand">${logo}<h1>REBATE <span>ATTACK FORCE</span></h1></div><button class="secondary-button" id="resume-button" hidden>Resume game <span>Esc</span></button><div id="play-panel"></div><div class="connection-status" id="connection-status">THE SCRAPYARD IS OPEN</div></section></div>
   <div class="match-over" id="match-over" hidden><div><div class="eyebrow">THE SCRAPYARD HAS SPOKEN</div><h2 id="winner-name"></h2><button class="primary-button" id="rematch-button">Run it back <span>↗</span></button></div></div>
 </main>
-<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last frog standing wins. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Water is a one-way trip.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. W or ↑ to jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Touch crates to stock up on rockets, grenades, or close-range pulses. Choose a weapon in your stash, press 2, aim, hold to charge, then release.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, jump onto, or stomp them from above to send them rolling. Local mode shares a keyboard. Online mode gives you a private room link for 2–4 players. The host starts once everyone is in.</div></div><p>Practice keeps you in control and respawns your target. These maps and frogs are original. Sound effects are CC0 by Kenney.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
+<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Water is a one-way trip.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Touch crates to stock up on rockets, grenades, or close-range pulses. Choose a weapon in your stash, press 2, aim, hold to charge, then release.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, jump onto, or stomp them from above to send them rolling. Local mode shares a keyboard. Online mode gives you a private room link for 2–4 players. The host chooses each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice keeps you in control and respawns your target. These maps and frogs are original. Sound effects are CC0 by Kenney.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -52,6 +55,10 @@ let tool: "grapple" | "weapon" = "grapple";
 let sound = false;
 let playerName = "Sprout";
 let busy = false;
+let lastEnter = -Infinity;
+const localTeams: Record<string, TeamSettings> = {
+  p1: { ...DEFAULT_TEAM_SETTINGS }, p2: { ...DEFAULT_TEAM_SETTINGS },
+};
 let aim = { x: 440, y: 1400 };
 let pointer: { x: number; y: number } | null = null;
 let camera: Camera | null = null;
@@ -120,7 +127,7 @@ function canControl() {
     screen === "playing" &&
     !menuOpen && $("guide").hidden &&
     (state.phase === "playing" || state.phase === "retreat") &&
-    (!network || network.sessionId === state.activePlayerId)
+    (!network || (network.isConnected && network.sessionId === state.activeTeamId))
   );
 }
 function input(): PlayerInput {
@@ -134,7 +141,7 @@ function input(): PlayerInput {
   };
 }
 function currentId() {
-  return network ? network.sessionId : state.activePlayerId;
+  return state.activePlayerId;
 }
 function syncInput() {
   if (!canControl()) return;
@@ -167,6 +174,7 @@ function setTool(next: "grapple" | "weapon") {
   updateHud(true);
 }
 function clearInputs() {
+  lastEnter = -Infinity;
   keys.clear();
   chargingAt = null;
   $("charging").hidden = true;
@@ -194,13 +202,30 @@ function modeLabel() {
       ? "LOCAL HOT-SEAT"
       : "PRIVATE ROOM";
 }
+function settingsMarkup(id: string, name: string, settings: TeamSettings, editable: boolean) {
+  return `<fieldset class="team-settings" data-team="${escapeHtml(id)}"><legend>${escapeHtml(name)} · team setup</legend><label>Frogs<input type="number" data-setting="frogs" aria-label="${escapeHtml(name)} frogs" min="1" max="${MAX_FROGS}" step="1" required value="${settings.frogs}" ${editable ? "" : "disabled"}></label><label>HP per frog<input type="number" data-setting="hp" aria-label="${escapeHtml(name)} HP per frog" min="1" max="${MAX_HP}" step="1" required value="${settings.hp}" ${editable ? "" : "disabled"}></label></fieldset>`;
+}
+function validSetup() {
+  return Array.from($("play-panel").querySelectorAll<HTMLInputElement>("[data-setting]")).every((input) => input.reportValidity());
+}
+$("play-panel").addEventListener("change", (event) => {
+  const field = event.target;
+  if (!(field instanceof HTMLInputElement) || !field.dataset.setting) return;
+  const group = field.closest<HTMLFieldSetElement>("[data-team]")!;
+  const settings = {
+    frogs: group.querySelector<HTMLInputElement>('[data-setting="frogs"]')!.valueAsNumber,
+    hp: group.querySelector<HTMLInputElement>('[data-setting="hp"]')!.valueAsNumber,
+  };
+  if (!validTeamSettings(settings)) { field.reportValidity(); return; }
+  if (network) network.configureTeam(group.dataset.team!, settings);
+  else localTeams[group.dataset.team!] = settings;
+});
 function rosterMarkup() {
-  return state.players
-    .map(
-      (p) =>
-        `<div class="player-row ${p.id === state.activePlayerId ? "current-player" : ""} ${p.alive ? "" : "dead"}"><div class="avatar" style="color:${p.color}">♟</div><div class="player-info"><strong>${escapeHtml(p.name)}${network && p.id === network.sessionId ? " · you" : ""}</strong><small>${!p.alive ? "Out of the action" : p.id === state.activePlayerId ? "Making trouble" : "Biding their time"}</small></div><span class="player-hp">${Math.ceil(p.hp)}</span></div>`,
-    )
-    .join("");
+  return state.teams.map((team) => {
+    const frogs = state.players.filter((p) => p.teamId === team.id);
+    return `<div class="team-roster"><div class="team-heading" style="color:${team.color}">${escapeHtml(team.name)}${network?.sessionId === team.id ? " · you" : ""}<small>${frogs.filter((p) => p.alive).length}/${frogs.length} alive${team.connected ? "" : " · Offline · turns skipped"}</small></div>${frogs.map((p) =>
+      `<div class="player-row ${p.id === state.activePlayerId ? "current-player" : ""} ${p.alive ? "" : "dead"}"><div class="avatar" style="color:${p.color}">♟</div><div class="player-info"><strong>Frog ${p.number}</strong><small>${!p.alive ? "Out of the action" : !team.connected ? "Waiting to rejoin" : p.id === state.activePlayerId ? "Making trouble" : "Biding their time"}</small></div><span class="player-hp">${Math.ceil(p.hp)}<small> / ${p.maxHp}</small></span></div>`).join("")}</div>`;
+  }).join("");
 }
 function renderPanel() {
   const panel = $("play-panel");
@@ -208,7 +233,7 @@ function renderPanel() {
   menuOpen = false;
   syncMenu();
   if (screen === "menu") {
-    panel.innerHTML = `<div class="panel-title"><h2>Pick your trouble.</h2><span class="tiny-tag">LET’S PLAY</span></div><div class="mode-tabs" role="tablist" aria-label="Game mode">${(["practice", "local", "online"] as const).map((m) => `<button class="mode-tab ${m === selectedMode ? "active" : ""}" role="tab" aria-selected="${m === selectedMode}" data-mode="${m}">${m === "practice" ? "Practice" : m === "local" ? "Local" : "Online"}</button>`).join("")}</div><label class="input-label" for="player-name">YOUR CALLSIGN</label><input class="text-input" id="player-name" maxlength="20" value="${escapeHtml(playerName)}" autocomplete="nickname" placeholder="A perfectly normal frog"/><p class="mode-description">${selectedMode === "practice" ? "Find your swing. Try the weapons. Your patient target frog won’t hold a grudge." : selectedMode === "local" ? "Two frogs. One keyboard. Take turns making life difficult for a nearby friend." : "Make a private room, send the link, and bring up to three friends. No sign-up required."}</p><button class="primary-button" id="start-button" ${busy ? "disabled" : ""}>${busy ? "Connecting…" : selectedMode === "practice" ? "Start practice" : selectedMode === "local" ? "Start local match" : "Create a room"} <span>↗</span></button>${selectedMode === "online" ? '<div class="join-fields"><input class="text-input" id="room-code-input" aria-label="Room code or invite link" placeholder="Have a room code?" maxlength="200"/><button id="join-button">Join</button></div>' : ""}<div class="anonymous-note">${selectedMode === "online" ? "↗ Share a link. Skip the sign-up." : "⌁ Keyboard + mouse recommended"}</div>`;
+    panel.innerHTML = `<div class="panel-title"><h2>Pick your trouble.</h2><span class="tiny-tag">LET’S PLAY</span></div><div class="mode-tabs" role="tablist" aria-label="Game mode">${(["practice", "local", "online"] as const).map((m) => `<button class="mode-tab ${m === selectedMode ? "active" : ""}" role="tab" aria-selected="${m === selectedMode}" data-mode="${m}">${m === "practice" ? "Practice" : m === "local" ? "Local" : "Online"}</button>`).join("")}</div><label class="input-label" for="player-name">YOUR CALLSIGN</label><input class="text-input" id="player-name" maxlength="20" value="${escapeHtml(playerName)}" autocomplete="nickname" placeholder="A perfectly normal frog"/><p class="mode-description">${selectedMode === "practice" ? "Find your swing. Try the weapons. Your patient target frog won’t hold a grudge." : selectedMode === "local" ? "Two teams. One keyboard. Take turns making life difficult for a nearby friend." : "Make a private room, send the link, and bring up to three friends. No sign-up required."}</p>${selectedMode === "local" ? settingsMarkup("p1", playerName, localTeams.p1, true) + settingsMarkup("p2", "Rusty", localTeams.p2, true) : ""}<button class="primary-button" id="start-button" ${busy ? "disabled" : ""}>${busy ? "Connecting…" : selectedMode === "practice" ? "Start practice" : selectedMode === "local" ? "Start local match" : "Create a room"} <span>↗</span></button>${selectedMode === "online" ? '<div class="join-fields"><input class="text-input" id="room-code-input" aria-label="Room code or invite link" placeholder="Have a room code?" maxlength="200"/><button id="join-button">Join</button></div>' : ""}<div class="anonymous-note">${selectedMode === "online" ? "↗ Share a link. Skip the sign-up." : "⌁ Keyboard + mouse recommended"}</div>`;
     panel.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(
       (b) =>
         (b.onclick = () => {
@@ -218,7 +243,13 @@ function renderPanel() {
           renderPanel();
         }),
     );
+    const savedRoom = new URL(location.href).searchParams.get("room");
+    if (selectedMode === "online" && savedRoom && savedSeat(savedRoom)) {
+      panel.insertAdjacentHTML("beforeend", `<button class="secondary-button" id="rejoin-button" ${busy ? "disabled" : ""}>Rejoin your team</button>`);
+      $("rejoin-button").onclick = () => void connectOnline(savedRoom, true);
+    }
     $("start-button").onclick = () => {
+      if (!validSetup()) return;
       saveName();
       unlockAudio();
       playSound("ui");
@@ -236,12 +267,13 @@ function renderPanel() {
       };
   } else if (screen === "lobby" && lobby) {
     const host = lobby.hostId === network?.sessionId;
-    panel.innerHTML = `<div class="panel-title"><h2>The gang’s all here?</h2><span class="tiny-tag">${lobby.players.length}/4</span></div><div class="session-title"><i class="live-dot"></i> Private room · no accounts</div><div class="room-code"><code>${escapeHtml(lobby.roomId)}</code><button class="copy-button" id="copy-invite">Copy invite</button></div><div class="roster">${lobby.players.map((p) => `<div class="player-row"><span class="avatar" style="color:${p.color}">♟</span><div class="player-info"><strong>${escapeHtml(p.name)}${p.id === network?.sessionId ? " · you" : ""}</strong><small>${p.id === lobby?.hostId ? "Room host" : "Ready for trouble"}</small></div><i class="live-dot"></i></div>`).join("")}</div><p class="waiting">${lobby.players.length < 2 ? "Send the invite to a friend. At least two frogs make a fight." : host ? "Everyone in? Start the match when you’re ready." : "Waiting for the host to start the match."}</p><button class="primary-button" id="launch-room" ${!host || lobby.players.length < 2 ? "disabled" : ""}>${host ? "Start the match" : "Waiting for host"} <span>↗</span></button><button class="secondary-button" id="leave-button">Leave room</button>`;
+    const ready = lobby.players.filter((p) => p.connected).length;
+    panel.innerHTML = `<div class="panel-title"><h2>Build your teams.</h2><span class="tiny-tag">${lobby.players.length}/4 TEAMS</span></div><div class="session-title"><i class="live-dot"></i> Private room · no accounts</div><div class="room-code"><code>${escapeHtml(lobby.roomId)}</code><button class="copy-button" id="copy-invite">Copy invite</button></div><div class="roster">${lobby.players.map((p) => `<div class="lobby-team"><div class="player-row"><span class="avatar" style="color:${p.color}">♟</span><div class="player-info"><strong>${escapeHtml(p.name)}${p.id === network?.sessionId ? " · you" : ""}</strong><small>${!p.connected ? "Offline · seat saved" : p.id === lobby?.hostId ? "Room host" : "Ready for trouble"}</small></div></div>${settingsMarkup(p.id, p.name, p, host)}</div>`).join("")}</div><p class="waiting">${ready < 2 ? "Invite a friend. Two connected teams are needed to start." : host ? "Choose each team’s frogs and starting HP, then start when ready." : "The host chooses each team’s frogs and starting HP."} Living frogs take turns in order.</p><button class="primary-button" id="launch-room" ${!host || ready < 2 ? "disabled" : ""}>${host ? "Start the match" : "Waiting for host"} <span>↗</span></button><button class="secondary-button" id="leave-button">Leave room</button>`;
     $("copy-invite").onclick = copyInvite;
-    $("launch-room").onclick = () => network?.start();
+    $("launch-room").onclick = () => { if (validSetup()) network?.start(); };
     $("leave-button").onclick = () => void leaveToMenu();
   } else {
-    panel.innerHTML = `<div class="panel-title"><h2>The troublemakers.</h2><span class="tiny-tag">${modeLabel()}</span></div><div class="session-title"><i class="live-dot"></i> ${network ? "Connected · server rules" : selectedMode === "practice" ? "Your very own testing ground" : "Pass the keyboard each turn"}</div><div class="roster" id="roster">${rosterMarkup()}</div><div class="weapon-card"><div class="weapon-label" id="weapon-label">YOUR STASH · UNUSED AMMO CARRIES</div><div class="weapon-name" id="weapon-name">Crate required</div><div class="weapon-note" id="weapon-note">Find a crate to get your hands on something irresponsible.</div></div>${network ? '<button class="secondary-button" id="copy-invite">Copy room link</button>' : ""}<button class="secondary-button" id="leave-button">${network ? "Leave match" : "Back to camp"}</button>`;
+    panel.innerHTML = `<div class="panel-title"><h2>The troublemakers.</h2><span class="tiny-tag">${modeLabel()}</span></div><div class="session-title"><i class="live-dot"></i> ${network ? "Connected · server rules" : selectedMode === "practice" ? "Your very own testing ground" : "Pass the keyboard each turn"}</div><div class="roster" id="roster">${rosterMarkup()}</div><div class="weapon-card"><div class="weapon-label" id="weapon-label">YOUR STASH · UNUSED AMMO CARRIES</div><div class="weapon-name" id="weapon-name">Crate required</div><div class="weapon-note" id="weapon-note">Find a crate to get your hands on something irresponsible.</div></div>${network ? '<button class="secondary-button" id="copy-invite">Copy room link</button>' : ""}<button class="secondary-button" id="leave-button">${network ? "Leave match · forfeit team" : "Back to camp"}</button>`;
     $("leave-button").onclick = () => void leaveToMenu();
     if (network) $("copy-invite").onclick = copyInvite;
 
@@ -278,10 +310,11 @@ function startLocal() {
   engine = new GameEngine({
     mode: selectedMode === "practice" ? "practice" : "versus",
     players: [
-      { id: "p1", name: playerName },
+      { id: "p1", name: playerName, ...(selectedMode === "local" ? localTeams.p1 : {}) },
       {
         id: "p2",
         name: selectedMode === "practice" ? "Target practice" : "Rusty",
+        ...(selectedMode === "local" ? localTeams.p2 : {}),
       },
     ],
   });
@@ -303,7 +336,7 @@ function resetObserved() {
   previousRope = false;
   previousSignature = "";
 }
-async function connectOnline(roomId?: string) {
+async function connectOnline(roomId?: string, rejoin = false) {
   if (busy) return;
   if (roomId !== undefined && !roomId) {
     announce("Paste a room code or your friend’s invite link.");
@@ -317,9 +350,6 @@ async function connectOnline(roomId?: string) {
       lobby = next;
       if (!next.started) {
         screen = "lobby";
-        renderPanel();
-      } else if (screen !== "playing") {
-        screen = "playing";
         renderPanel();
       }
     },
@@ -342,9 +372,14 @@ async function connectOnline(roomId?: string) {
       screen = "menu";
       engine = new GameEngine({ mode: "practice" });
       state = engine.state;
-      history.replaceState(null, "", location.pathname);
       renderPanel();
       announce(reason);
+    },
+    onConnection(connected) {
+      if (network !== connection) return;
+      clearInputs();
+      $("connection-status").textContent = connected ? "CONNECTED TO THE SCRAPYARD" : "RECONNECTING · YOUR TEAM’S TURNS ARE SKIPPED";
+      updateHud(true);
     },
     onError(message) {
       announce(message);
@@ -352,10 +387,11 @@ async function connectOnline(roomId?: string) {
   });
   network = connection;
   try {
-    if (roomId) await connection.join(roomId, playerName);
+    if (roomId && rejoin) await connection.rejoin(roomId);
+    else if (roomId) await connection.join(roomId, playerName);
     else await connection.create(playerName);
     engine = null;
-    screen = "lobby";
+    if (screen !== "playing") screen = "lobby";
     const url = new URL(location.href);
     url.searchParams.set("room", connection.roomId);
     history.replaceState(null, "", url);
@@ -437,7 +473,7 @@ function updateHud(force = false) {
   }
   if (!p) return;
   $("turn-player").textContent =
-    network && p.id !== network.sessionId
+    network && p.teamId !== network.sessionId
       ? `${p.name}’s turn`
       : selectedMode === "practice"
         ? "Find your swing."
@@ -457,7 +493,11 @@ function updateHud(force = false) {
     state.timeLeft < 10 && selectedMode !== "practice",
   );
   $("objective-toast").textContent =
-    state.phase === "settling"
+    network && !network.isConnected
+      ? "Reconnecting… Your team’s turns are skipped."
+      : state.phase === "waiting"
+        ? "Waiting for a team to reconnect…"
+      : state.phase === "settling"
       ? "Let the dust settle…"
       : !canControl() && state.phase !== "finished"
         ? `${p.name} is making a move. Your turn is coming.`
@@ -468,7 +508,7 @@ function updateHud(force = false) {
     const signature =
       state.players
         .map((q) => `${q.id}:${q.name}:${q.hp}:${q.alive}`)
-        .join("|") + state.activePlayerId;
+        .join("|") + state.activePlayerId + state.teams.map((team) => `${team.id}:${team.connected}`).join("|");
     if (signature !== previousSignature) {
       $("roster").innerHTML = rosterMarkup();
       previousSignature = signature;
@@ -502,7 +542,7 @@ function updateHud(force = false) {
   }
   if (state.phase === "finished") {
     $("winner-name").textContent = state.winnerId
-      ? `${state.players.find((q) => q.id === state.winnerId)?.name || "A frog"} wins.`
+      ? `${state.teams.find((q) => q.id === state.winnerId)?.name || "A team"} wins.`
       : "Everybody splashed.";
     $<HTMLButtonElement>("rematch-button").disabled =
       !!network && lobby?.hostId !== network.sessionId;
@@ -591,7 +631,8 @@ canvas.addEventListener("pointercancel", () => {
 window.addEventListener("keydown", (e) => {
   if (
     e.target instanceof HTMLInputElement ||
-    e.target instanceof HTMLTextAreaElement
+    e.target instanceof HTMLTextAreaElement ||
+    e.target instanceof HTMLSelectElement
   )
     return;
   if (!$("guide").hidden) {
@@ -599,7 +640,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   const key = e.key.toLowerCase();
-  if (
+  if (screen === "playing" && !menuOpen &&
     [" ", "arrowup", "arrowdown", "arrowleft", "arrowright", "enter"].includes(
       key,
     )
@@ -620,7 +661,7 @@ window.addEventListener("keydown", (e) => {
   if (key === "1") setTool("grapple");
   else if (key === "2") setTool("weapon");
   else if (key === " ") hook();
-  else if (key === "enter") command({ type: "endTurn" });
+  else if (key === "enter") enterJump();
   else if ((key === "w" || key === "arrowup") && !active()?.rope)
     command({ type: "jump" });
   else if (key === "shift") command({ type: "jump" });
@@ -647,7 +688,13 @@ for (const button of document.querySelectorAll<HTMLButtonElement>(
   button.addEventListener("pointerup", () => keys.delete(key));
   button.addEventListener("pointercancel", () => keys.delete(key));
 }
-$("touch-jump").onclick = () => command({ type: "jump" });
+function enterJump() {
+  const now = performance.now();
+  const double = now - lastEnter <= DOUBLE_JUMP_SECONDS * 1000;
+  const accepted = command({ type: double ? "backflip" : "jump" });
+  lastEnter = !double && accepted ? now : -Infinity;
+}
+$("touch-jump").onclick = enterJump;
 $("touch-hook").onclick = hook;
 $("grapple-tool").onclick = () => setTool("grapple");
 $("weapon-tool").onclick = () => setTool("weapon");
@@ -736,11 +783,13 @@ function frame(now: number) {
   } else displayedPlayers.clear();
   camera = followCamera(camera, renderedState, viewport.width, viewport.height, dt);
   refreshAim();
+  const canAim = canControl();
+  canvas.classList.toggle("can-aim", canAim);
   renderGame(ctx, renderedState, {
     camera,
     viewport,
     time: accumulated,
-    aim,
+    aim: canAim ? aim : undefined,
     tool,
     power,
     menu: screen !== "playing",
@@ -793,5 +842,6 @@ if (invite) {
   selectedMode = "online";
   renderPanel();
   $<HTMLInputElement>("room-code-input").value = invite;
-  announce("You’ve been invited. Choose a callsign and click Join.");
+  if (savedSeat(invite)) void connectOnline(invite, true);
+  else announce("You’ve been invited. Choose a callsign and click Join.");
 }

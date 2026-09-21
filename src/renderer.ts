@@ -1,12 +1,13 @@
 import type { GameState, Player, WeaponId } from "../shared/types";
 
 import type { Camera } from "./camera";
+import { frogPose } from "./frog";
 
 export interface RenderOptions {
   camera: Camera;
   viewport: { width: number; height: number; dpr: number };
   time: number;
-  aim: { x: number; y: number };
+  aim?: { x: number; y: number };
   tool: "grapple" | "weapon";
   power: number;
   menu: boolean;
@@ -86,22 +87,42 @@ function text(
 
 export function drawFrog(
   c: CanvasRenderingContext2D,
-  player: Pick<Player, "x" | "y" | "color" | "vx" | "vy" | "grounded" | "rotation">,
+  player: Player,
   time: number,
   scale = 1,
   aim?: { x: number; y: number },
+  players: Player[] = [],
 ) {
+  const pose = frogPose(player, players, aim);
   c.save();
   c.translate(player.x, player.y);
   c.scale(scale, scale);
-  const tilt = Math.max(-0.3, Math.min(0.3, player.vx / 1000));
-  c.rotate(tilt + player.rotation);
+  c.rotate(pose.rotation);
+  // Jointed hind legs and webbed toes, drawn behind the body.
+  c.lineCap = "round";
+  c.lineJoin = "round";
+  for (const { hip, knee, foot } of pose.legs) {
+    line(c, [hip.x, hip.y, knee.x, knee.y], ink, 11);
+    line(c, [hip.x, hip.y, knee.x, knee.y], player.color, 7.5);
+    line(c, [knee.x, knee.y, foot.x, foot.y], ink, 7);
+    line(c, [knee.x, knee.y, foot.x, foot.y], player.color, 4);
+    poly(c, [
+      foot.x - 4, foot.y - 2,
+      foot.x - 8, foot.y + 2,
+      foot.x - 2, foot.y + 1,
+      foot.x, foot.y + 3,
+      foot.x + 3, foot.y + 1,
+      foot.x + 8, foot.y + 2,
+      foot.x + 4, foot.y - 3,
+    ], player.color);
+    c.strokeStyle = ink;
+    c.lineWidth = 1.5;
+    c.stroke();
+  }
   const bounce = player.grounded ? Math.sin(time * 2.5) * 0.8 : 0;
   c.translate(0, bounce);
-  // Boots, knapsack and scarf: all drawn for this game.
+  // Knapsack.
   rounded(c, -23, -5, 12, 21, 5, "#667b5a", ink);
-  rounded(c, -21, 11, 15, 8, 4, player.color, ink);
-  rounded(c, 6, 11, 15, 8, 4, player.color, ink);
   c.beginPath();
   c.ellipse(0, 0, 22, 18, 0, 0, Math.PI * 2);
   c.fillStyle = player.color;
@@ -116,19 +137,29 @@ export function drawFrog(
   for (const x of [-11, 11]) {
     circle(c, x, -15, 10, ink);
     circle(c, x, -15, 8, player.color);
-    circle(c, x, -16, 5.5, "#fff6d9");
-    const ax = aim ? Math.max(-2, Math.min(2, (aim.x - player.x) / 100)) : 1;
-    const ay = aim ? Math.max(-2, Math.min(2, (aim.y - player.y) / 100)) : 0;
-    circle(c, x + ax, -16 + ay, 2.3, ink);
+    circle(c, x, -16, pose.alarmed ? 6.8 : 5.5, "#fff6d9");
+    circle(c, x + pose.eyes.x, -16 + pose.eyes.y, pose.alarmed ? 1.9 : 2.3, ink);
+    if (pose.alarmed)
+      line(c, [x - 6, x < 0 ? -27 : -29, x + 6, x < 0 ? -29 : -27], ink, 2);
   }
-  c.beginPath();
-  c.arc(1, -1, 7, 0.2, Math.PI - 0.2);
-  c.strokeStyle = ink;
-  c.lineWidth = 1.7;
-  c.stroke();
+  if (pose.alarmed) {
+    c.beginPath();
+    c.ellipse(1, 5, 5.5, 7, 0, 0, Math.PI * 2);
+    c.fillStyle = ink;
+    c.fill();
+    c.beginPath();
+    c.ellipse(1, 9, 3, 2, 0, 0, Math.PI * 2);
+    c.fillStyle = "#e69079";
+    c.fill();
+  } else {
+    c.beginPath();
+    c.arc(1, -1, 7, 0.2, Math.PI - 0.2);
+    c.strokeStyle = ink;
+    c.lineWidth = 1.7;
+    c.stroke();
+  }
   circle(c, -15, 0, 2.7, "#e69079");
   circle(c, 16, 0, 2.7, "#e69079");
-  poly(c, [-20, 6, -11, 10, -14, 21, -23, 18], "#d97851");
   c.restore();
 }
 
@@ -360,7 +391,7 @@ export function renderGame(
   o: RenderOptions,
 ) {
   c.save();
-  const { camera, viewport } = o;
+  const { camera, viewport, aim } = o;
   c.setTransform(viewport.dpr, 0, 0, viewport.dpr, 0, 0);
   c.clearRect(0, 0, viewport.width, viewport.height);
   // Background fills the screen independently from the world camera.
@@ -394,6 +425,7 @@ export function renderGame(
       Number(String(box.id).replace(/\D/g, "")) || 0,
     );
   const active = s.players.find((p) => p.id === s.activePlayerId);
+  const labels: { x: number; y: number; width: number }[] = [];
   for (const p of s.players) {
     if (!p.alive) continue;
     if (p.rope) {
@@ -410,28 +442,40 @@ export function renderGame(
       c.fillStyle = "#172f3438";
       c.fill();
     }
-    drawFrog(c, p, o.time, 1, p.id === s.activePlayerId ? o.aim : undefined);
+    drawFrog(
+      c, p, o.time, 1,
+      p.id === s.activePlayerId ? aim : undefined,
+      o.menu ? [] : s.players,
+    );
     c.textAlign = "center";
-    text(c, p.name, p.x, p.y - 49, 13, ink, 800);
-    rounded(c, p.x - 25, p.y - 41, 50, 4, 2, "#314c3d44");
+    c.font = "800 13px 'Trebuchet MS', sans-serif";
+    const labelWidth = Math.max(50, c.measureText(p.name).width) + 10;
+    let labelY = p.y - 49;
+    while (labels.some((label) => Math.abs(label.x - p.x) < (label.width + labelWidth) / 2 &&
+      Math.abs(label.y - labelY) < 30)) labelY -= 32;
+    labels.push({ x: p.x, y: labelY, width: labelWidth });
+    if (labelY < p.y - 49)
+      line(c, [p.x, labelY + 15, p.x, p.y - 32], "#314c3d55", 1);
+    text(c, p.name, p.x, labelY, 13, ink, 800);
+    rounded(c, p.x - 25, labelY + 8, 50, 4, 2, "#314c3d44");
     rounded(
       c,
       p.x - 25,
-      p.y - 41,
-      (Math.max(0, p.hp) / 100) * 50,
+      labelY + 8,
+      (Math.max(0, p.hp) / p.maxHp) * 50,
       4,
       2,
       p.color,
     );
     if (p.id === s.activePlayerId && !o.menu) {
-      const ay = p.y - 65 + Math.sin(o.time * 4) * 3;
+      const ay = labelY - 16 + Math.sin(o.time * 4) * 3;
       poly(c, [p.x - 5, ay, p.x + 5, ay, p.x, ay + 6], "#fbf7d9");
     }
     c.textAlign = "left";
   }
-  if (active && !o.menu && s.phase !== "finished") {
-    const dx = o.aim.x - active.x,
-      dy = o.aim.y - active.y,
+  if (active && aim && !o.menu && s.phase !== "finished") {
+    const dx = aim.x - active.x,
+      dy = aim.y - active.y,
       len = Math.hypot(dx, dy) || 1;
     c.globalAlpha = 0.65;
     if (o.tool === "weapon" && active.hasCrate) {
@@ -488,23 +532,23 @@ export function renderGame(
     c.strokeStyle = o.tool === "weapon" ? "#fff1c3" : "#315b49";
     c.lineWidth = 1.5;
     c.beginPath();
-    c.arc(o.aim.x, o.aim.y, 10, 0, 7);
+    c.arc(aim.x, aim.y, 10, 0, 7);
     c.stroke();
     line(
       c,
-      [o.aim.x - 16, o.aim.y, o.aim.x - 7, o.aim.y],
+      [aim.x - 16, aim.y, aim.x - 7, aim.y],
       c.strokeStyle as string,
       1.5,
     );
     line(
       c,
-      [o.aim.x + 7, o.aim.y, o.aim.x + 16, o.aim.y],
+      [aim.x + 7, aim.y, aim.x + 16, aim.y],
       c.strokeStyle as string,
       1.5,
     );
     line(
       c,
-      [o.aim.x, o.aim.y - 16, o.aim.x, o.aim.y - 7],
+      [aim.x, aim.y - 16, aim.x, aim.y - 7],
       c.strokeStyle as string,
       1.5,
     );

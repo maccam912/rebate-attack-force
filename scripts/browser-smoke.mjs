@@ -29,6 +29,7 @@ async function page() {
 }
 const snapshot = (p) =>
   p.evaluate(() => JSON.parse(window.render_game_to_text()));
+const cursor = (p) => p.locator("#game").evaluate((canvas) => getComputedStyle(canvas).cursor);
 async function aimAtWorld(page, x, y) {
   const { camera } = await snapshot(page);
   const rect = await page.locator("#game").boundingBox();
@@ -59,6 +60,17 @@ try {
   assert.equal(s.screen, "playing");
   await assertViewport(local);
   assert.equal(await local.locator("#menu-overlay").isVisible(), false);
+  await local.keyboard.press("Enter");
+  await local.waitForTimeout(90);
+  s = await snapshot(local);
+  assert.ok(s.players[0].vy < 0, "Enter jumps immediately");
+  assert.equal(s.turn, 1, "Enter does not end the turn");
+  await local.keyboard.press("Enter");
+  await local.waitForTimeout(80);
+  s = await snapshot(local);
+  assert.ok(s.players[0].vx < -200 && s.players[0].vy < -600, "Double Enter makes a higher backward jump");
+  await local.click("#reset-button");
+  s = await snapshot(local);
   const x = s.players[0].x;
   await local.keyboard.down("d");
   await local.waitForTimeout(650);
@@ -180,6 +192,24 @@ try {
   console.log(
     "PASS: local walk, crate pickup, charged shot, retreat, grappling/reeling/release, guide, hot-seat turns",
   );
+  await leaveMatch(local);
+  await local.fill('[data-team="p1"] [data-setting="frogs"]', "3");
+  await local.fill('[data-team="p1"] [data-setting="hp"]', "175");
+  await local.fill('[data-team="p2"] [data-setting="frogs"]', "2");
+  await local.fill('[data-team="p2"] [data-setting="hp"]', "250");
+  await local.click("#start-button");
+  s = await snapshot(local);
+  assert.equal(s.players.length, 5);
+  assert.ok(s.players.filter((p) => p.teamId === "p1").every((p) => p.hp === 175));
+  assert.ok(s.players.filter((p) => p.teamId === "p2").every((p) => p.hp === 250));
+  for (const id of ["p2", "p1:frog-2", "p2:frog-2", "p1:frog-3", "p2", "p1"]) {
+    await local.click("#end-turn");
+    await local.waitForFunction((id) => {
+      const s = JSON.parse(window.render_game_to_text());
+      return s.activePlayerId === id && s.camera.targetId === id;
+    }, id);
+  }
+  console.log("PASS: Enter jump, double Enter backward jump, local team settings and frog rotation");
   // Two actual browser clients create/join/start a private no-account room.
   const host = await page();
   await host.click('[data-mode="online"]');
@@ -199,6 +229,19 @@ try {
     () => JSON.parse(window.render_game_to_text()).screen === "lobby",
   );
   await host.locator("#launch-room:enabled").waitFor();
+  await host.fill('[data-setting="frogs"] >> nth=0', "2");
+  await host.locator(".panel-title").click();
+  await guest.waitForFunction(() => document.querySelector('[data-setting="frogs"]').value === "2");
+  await host.fill('[data-setting="hp"] >> nth=0', "175");
+  await host.locator(".panel-title").click();
+  await guest.waitForFunction(() => document.querySelector('[data-setting="hp"]').value === "175");
+  await host.fill('[data-setting="frogs"] >> nth=1', "3");
+  await host.locator(".panel-title").click();
+  await guest.waitForFunction(() => document.querySelectorAll('[data-setting="frogs"]')[1].value === "3");
+  await host.fill('[data-setting="hp"] >> nth=1', "250");
+  await host.locator(".panel-title").click();
+  await guest.waitForFunction(() => document.querySelectorAll('[data-setting="hp"]')[1].value === "250");
+  assert.equal(await guest.locator('[data-setting="frogs"]').first().isDisabled(), true);
   await host.screenshot({ path: "test-results/04-lobby.png", fullPage: true });
   await host.click("#launch-room");
   await wait(
@@ -209,6 +252,17 @@ try {
     guest,
     () => JSON.parse(window.render_game_to_text()).screen === "playing",
   );
+  await host.mouse.move(800, 450);
+  const hostAim = (await snapshot(host)).aim;
+  await guest.waitForFunction((aim) => {
+    const state = JSON.parse(window.render_game_to_text());
+    const active = state.players.find((player) => player.id === state.activePlayerId);
+    return Math.abs(active.lookAt.x - aim.x) < 0.1 && Math.abs(active.lookAt.y - aim.y) < 0.1;
+  }, hostAim);
+  assert.equal(await cursor(host), "crosshair");
+  assert.equal(await cursor(guest), "default", "Waiting players should not appear able to aim");
+  await guest.mouse.move(400, 600);
+  assert.deepEqual((await snapshot(guest)).players[0].lookAt, hostAim, "The guest's pointer cannot redirect the host's eyes");
   await host.locator("#game").focus();
   const before = await snapshot(host);
   await host.keyboard.down("d");
@@ -222,28 +276,66 @@ try {
   );
   assert.ok(after.players[0].hasCrate, "Online pickup must sync");
   // Inactive guest cannot move active frog.
-  const guestBefore = after.players[1].x;
+  const guestBefore = after.players.find((p) => p.teamId === after.sessionId).x;
   await guest.locator("#game").focus();
   await guest.keyboard.down("a");
   await guest.waitForTimeout(200);
   await guest.keyboard.up("a");
-  assert.equal((await snapshot(host)).players[1].x, guestBefore);
+  assert.equal((await snapshot(host)).players.find((p) => p.teamId === after.sessionId).x, guestBefore);
   await host.click("#end-turn");
   await wait(guest, () => {
     const s = JSON.parse(window.render_game_to_text());
-    return s.activePlayerId === s.sessionId;
+    return s.activeTeamId === s.sessionId;
   });
+  await host.waitForFunction(() => getComputedStyle(document.getElementById("game")).cursor === "default");
+  await guest.waitForFunction(() => getComputedStyle(document.getElementById("game")).cursor === "crosshair");
   await guest.screenshot({
     path: "test-results/05-online.png",
     fullPage: true,
   });
-  await leaveMatch(host);
+  const originalHost = (await snapshot(host)).sessionId;
+  const originalGuest = (await snapshot(guest)).sessionId;
+  // Reload destroys the old SDK object, forcing a manual token-based rejoin.
+  await host.reload();
+  await host.waitForFunction((id) => {
+    const s = JSON.parse(window.render_game_to_text());
+    return s.screen === "playing" && s.sessionId === id;
+  }, originalHost);
+  assert.equal((await snapshot(host)).players.length, 5);
+  await guest.click("#end-turn");
+  await host.waitForFunction((id) => JSON.parse(window.render_game_to_text()).activePlayerId === `${id}:frog-2`, originalHost);
+  await host.locator("#game").focus();
+  await host.keyboard.press("Enter");
+  await host.waitForFunction((id) => JSON.parse(window.render_game_to_text()).players.find((p) => p.id === `${id}:frog-2`).vy < -100, originalHost);
+  // The room and its team stay alive while the tab is gone.
+  const hostContext = host.context();
+  const roomUrl = host.url();
+  await host.close();
+  await guest.waitForFunction((id) => {
+    const s = JSON.parse(window.render_game_to_text());
+    return s.activeTeamId === s.sessionId && s.teams.find((t) => t.id === id).connected === false;
+  }, originalHost);
+  assert.ok((await snapshot(guest)).players.filter((p) => p.teamId === originalHost).every((p) => p.alive));
+  await guest.click("#end-turn");
+  await guest.waitForFunction((id) => JSON.parse(window.render_game_to_text()).activePlayerId === `${id}:frog-3`, originalGuest);
+  const returnedHost = await hostContext.newPage();
+  returnedHost.on("pageerror", (e) => errors.push(e.message));
+  await returnedHost.goto(roomUrl);
+  await returnedHost.waitForFunction((id) => {
+    const s = JSON.parse(window.render_game_to_text());
+    return s.screen === "playing" && s.sessionId === id;
+  }, originalHost);
+  await guest.click("#end-turn");
+  await returnedHost.waitForFunction((id) => JSON.parse(window.render_game_to_text()).activePlayerId === id, originalHost);
+  assert.equal((await snapshot(returnedHost)).activePlayerId, originalHost);
+  await returnedHost.screenshot({ path: "test-results/08-rejoined-team.png", fullPage: true });
+  await leaveMatch(returnedHost);
   await wait(
     guest,
     () => JSON.parse(window.render_game_to_text()).phase === "finished",
   );
   console.log(
-    "PASS: two-browser anonymous room, invite join, host start, synchronized movement/pickup, turn authority, turn handoff, disconnect winner",
+    "PASS: two-browser anonymous room, invite join, host start, synchronized gaze/movement/pickup, turn authority, aiming cursor handoff, host team settings, reload/closed-tab rejoin, offline turn skipping, explicit forfeit",
   );
   const mobile = await browser.newPage({
     viewport: { width: 390, height: 844 },

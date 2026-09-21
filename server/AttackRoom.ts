@@ -1,6 +1,7 @@
 import { Room, ServerError, type Client } from "@colyseus/core";
 import { GameEngine } from "../shared/game";
-import type { GameCommand, PlayerInput, WeaponId } from "../shared/types";
+import type { GameCommand, PlayerInput, Team, WeaponId } from "../shared/types";
+import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, validTeamSettings } from "../shared/settings";
 
 const COLORS = ["#baf27c", "#ffac81", "#acb9ff", "#ffde75"];
 const NEUTRAL: PlayerInput = {
@@ -13,6 +14,7 @@ const NEUTRAL: PlayerInput = {
 };
 const COMMANDS = new Set([
   "jump",
+  "backflip",
   "grapple",
   "release",
   "fire",
@@ -20,7 +22,7 @@ const COMMANDS = new Set([
   "selectWeapon",
 ]);
 const WEAPONS = new Set<WeaponId>(["rocket", "grenade", "pulse"]);
-type Guest = { id: string; name: string; color: string };
+type Guest = Team;
 type Budget = { at: number; tokens: number };
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -36,6 +38,7 @@ export class AttackRoom extends Room {
   private game: GameEngine | null = null;
   private lastInput = new Map<string, number>();
   private budgets = new Map<string, Budget>();
+  private emptySince: number | null = null;
 
   async onCreate() {
     await this.setPrivate(true);
@@ -59,7 +62,7 @@ export class AttackRoom extends Room {
       )
         return;
       const game = this.game!;
-      game.setInput(client.sessionId, {
+      game.setInput(game.state.activePlayerId, {
         left: message.left === true,
         right: message.right === true,
         up: message.up === true,
@@ -73,7 +76,7 @@ export class AttackRoom extends Room {
           Math.min(game.state.height * 2, message.aimY),
         ),
       });
-      this.lastInput.set(client.sessionId, Date.now());
+      this.lastInput.set(game.state.activePlayerId, Date.now());
     });
     this.onMessage("command", (client, message: unknown) => {
       if (
@@ -104,7 +107,28 @@ export class AttackRoom extends Room {
         command.power = Math.max(0, Math.min(1, message.power));
       if (typeof message.weapon === "string")
         command.weapon = message.weapon as WeaponId;
-      this.game!.command(client.sessionId, command);
+      this.game!.command(this.game!.state.activePlayerId, command);
+    });
+    this.onMessage("teamSettings", (client, message: unknown) => {
+      if (!this.consume(client, "settings", 20)) return;
+      if (client.sessionId !== this.hostId) {
+        client.send("notice", "Only the room host can change team settings.");
+        return;
+      }
+      if (this.game) {
+        client.send("notice", "Team settings are fixed once the match starts.");
+        return;
+      }
+      if (!record(message) || typeof message.teamId !== "string" ||
+        !validTeamSettings(message)) {
+        client.send("notice", `Choose 1–${MAX_FROGS} frogs and 1–${MAX_HP} HP per frog.`);
+        return;
+      }
+      const team = this.guests.get(message.teamId);
+      if (!team) return;
+      team.frogs = message.frogs;
+      team.hp = message.hp;
+      this.broadcast("lobby", this.lobby());
     });
     this.onMessage("start", (client) => {
       if (!this.consume(client, "control", 5) || this.game) return;
@@ -118,8 +142,14 @@ export class AttackRoom extends Room {
       if (!this.game) return;
       // Losing focus or connectivity must never leave a movement key held forever.
       const id = this.game.state.activePlayerId;
-      if (Date.now() - (this.lastInput.get(id) ?? 0) > 1000)
-        this.game.setInput(id, NEUTRAL);
+      if (Date.now() - (this.lastInput.get(id) ?? 0) > 1000) {
+        const player = this.game.state.players.find((candidate) => candidate.id === id)!;
+        this.game.setInput(id, {
+          ...NEUTRAL,
+          aimX: player.lookAt.x,
+          aimY: player.lookAt.y,
+        });
+      }
       this.game.step(dt);
     }, 60);
     // Disable schema patches after installing the simulation: setting this before
@@ -128,6 +158,11 @@ export class AttackRoom extends Room {
     this.clock.setInterval(() => {
       if (this.game) this.broadcast("state", this.game.state);
     }, 50);
+    // Keep seats through long drops/reloads, but do not retain abandoned rooms forever.
+    this.clock.setInterval(() => {
+      if (this.emptySince !== null && Date.now() - this.emptySince > 30 * 60 * 1000)
+        void this.disconnect();
+    }, 10000);
   }
 
   onJoin(client: Client, options: unknown) {
@@ -142,19 +177,31 @@ export class AttackRoom extends Room {
         .slice(0, 20) || `Guest ${this.guests.size + 1}`;
     const used = new Set([...this.guests.values()].map((guest) => guest.color));
     const color = COLORS.find((candidate) => !used.has(candidate)) ?? COLORS[0];
-    this.guests.set(client.sessionId, { id: client.sessionId, name, color });
+    this.guests.set(client.sessionId, {
+      id: client.sessionId, name, color, connected: true, ...DEFAULT_TEAM_SETTINGS,
+    });
+    this.emptySince = null;
     if (!this.hostId) this.hostId = client.sessionId;
     this.broadcast("lobby", this.lobby());
   }
 
   onDrop(client: Client) {
-    this.game?.setInput(client.sessionId, NEUTRAL);
-    this.lastInput.delete(client.sessionId);
-    // Existing tabs can recover brief network drops without accounts or cookies.
-    this.allowReconnection(client, 15);
+    this.allowReconnection(client, "manual");
+    const guest = this.guests.get(client.sessionId);
+    if (guest) guest.connected = false;
+    this.game?.setTeamConnected(client.sessionId, false);
+    this.updateHost();
+    this.broadcast("lobby", this.lobby());
+    if (this.game) this.broadcast("state", this.game.state);
   }
 
   onReconnect(client: Client) {
+    const guest = this.guests.get(client.sessionId);
+    if (guest) guest.connected = true;
+    this.game?.setTeamConnected(client.sessionId, true);
+    this.emptySince = null;
+    this.updateHost();
+    this.broadcast("lobby", this.lobby());
     client.send("lobby", this.lobby());
     if (this.game) client.send("state", this.game.state);
   }
@@ -165,8 +212,7 @@ export class AttackRoom extends Room {
     for (const key of this.budgets.keys()) {
       if (key.startsWith(`${client.sessionId}:`)) this.budgets.delete(key);
     }
-    if (client.sessionId === this.hostId)
-      this.hostId = this.guests.keys().next().value ?? "";
+    this.updateHost();
     this.game?.removePlayer(client.sessionId);
     this.broadcast("lobby", this.lobby());
     if (this.game) this.broadcast("state", this.game.state);
@@ -176,8 +222,8 @@ export class AttackRoom extends Room {
     return (
       this.game !== null &&
       this.game.state.phase !== "finished" &&
-      this.game.state.activePlayerId === client.sessionId &&
-      this.guests.has(client.sessionId)
+      this.game.state.activeTeamId === client.sessionId &&
+      this.guests.get(client.sessionId)?.connected === true
     );
   }
 
@@ -189,7 +235,7 @@ export class AttackRoom extends Room {
       );
       return;
     }
-    if (this.guests.size < 2) {
+    if ([...this.guests.values()].filter((guest) => guest.connected).length < 2) {
       client.send("notice", "Invite at least one friend before starting.");
       return;
     }
@@ -202,6 +248,13 @@ export class AttackRoom extends Room {
     this.lastInput.clear();
     this.broadcast("lobby", this.lobby());
     this.broadcast("state", this.game.state);
+  }
+
+  private updateHost() {
+    const connected = [...this.guests.values()].filter((guest) => guest.connected);
+    if (!this.guests.get(this.hostId)?.connected) this.hostId = connected[0]?.id ?? "";
+    if (connected.length === 0) this.emptySince ??= Date.now();
+    else this.emptySince = null;
   }
 
   private lobby() {
