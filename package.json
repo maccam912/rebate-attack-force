@@ -1,0 +1,32 @@
+{
+  "name": "rebate-attack-force",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n game,rooms -c green,cyan \"vite --host 0.0.0.0\" \"tsx watch server/index.ts\"",
+    "dev:client": "vite --host 0.0.0.0",
+    "dev:server": "tsx watch server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "start": "tsx server/index.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:browser": "node scripts/browser-smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:visual": "node scripts/visual-review.mjs"
+  },
+  "dependencies": {
+    "@colyseus/core": "^0.18.0",
+    "@colyseus/sdk": "^0.18.0",
+    "@colyseus/ws-transport": "^0.18.0",
+    "express": "^5.1.0",
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.2.0",
+    "playwright": "^1.55.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  }
+}

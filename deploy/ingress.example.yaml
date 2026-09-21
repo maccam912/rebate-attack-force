@@ -1,0 +1,26 @@
+# Optional ingress-nginx example. Set your hostname, ingress class and TLS secret.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rebate-attack-force
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16k"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - rebate.example.com
+      secretName: rebate-attack-force-tls
+  rules:
+    - host: rebate.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rebate-attack-force
+                port:
+                  name: http
