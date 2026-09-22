@@ -64,15 +64,15 @@ export function followCamera(previous: Camera | null, state: GameState, width: n
     }
   }
 
-  const snap = !previous || (!cinematic && previous.targetId !== targetId);
+  // Only initialize instantly; turn changes and distant targets use the same smooth follow.
+  const snap = !previous;
   const zoomBlend = snap ? 1 : 1 - Math.exp(-Math.max(0, dt) * (targetZoom < previous.zoom ? 9 : 4));
   const zoom = Math.max(worldZoom, (previous?.zoom ?? targetZoom) + (targetZoom - (previous?.zoom ?? targetZoom)) * zoomBlend);
   const viewWidth = width / zoom;
   const viewHeight = height / zoom;
   const x = clamp(target.x - viewWidth * 0.5, 0, state.width - viewWidth);
   const y = clamp(target.y - viewHeight * verticalAnchor, 0, state.height - viewHeight);
-  const teleport = !cinematic && previous && Math.hypot(x - previous.x, y - previous.y) > 1400;
-  const blend = snap || teleport ? 1 : 1 - Math.exp(-Math.max(0, dt) * (reveal ? 9 : 7));
+  const blend = snap ? 1 : 1 - Math.exp(-Math.max(0, dt) * (reveal ? 9 : 7));
   // Blend centers so a changing zoom does not appear to pull toward the corner.
   const centerX = (previous ? previous.x + previous.width / 2 : target.x);
   const centerY = (previous ? previous.y + previous.height / 2 : target.y);

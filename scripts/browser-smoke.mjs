@@ -165,10 +165,10 @@ try {
   await wait(local, () => !!JSON.parse(window.render_game_to_text()).camera);
   const cameraBeforeTurn = (await snapshot(local)).camera.x;
   await local.click("#end-turn");
-  await wait(local, () => {
+  await local.waitForFunction((previousX) => {
     const s = JSON.parse(window.render_game_to_text());
-    return s.activePlayerId === "p2" && s.camera.targetId === "p2";
-  });
+    return s.activePlayerId === "p2" && s.camera.targetId === "p2" && s.camera.x > previousX + 2000;
+  }, cameraBeforeTurn);
   assert.ok((await snapshot(local)).camera.x > cameraBeforeTurn + 2000, "Camera follows the next player across the large world");
   await local.click("#end-turn");
   await wait(

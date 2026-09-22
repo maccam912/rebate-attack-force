@@ -14,9 +14,36 @@ test("the camera follows movement, clamps at world edges, and switches active pl
   assert.ok(moving.x > start.x && moving.y < start.y);
   state.activePlayerId = state.players[1].id;
   const switched = followCamera(moving, state, 1440, 900, 1 / 60);
-  assert.ok(state.players[1].x >= switched.x && state.players[1].x <= switched.x + switched.width);
+  const destination = followCamera(null, state, 1440, 900, 1 / 60);
+  assert.ok(switched.x > moving.x && switched.x < destination.x, "A new turn pans toward its frog without snapping");
+  let arrived = switched;
+  for (let i = 1; i < 36; i++) arrived = followCamera(arrived, state, 1440, 900, 1 / 60);
+  assert.ok(visible(arrived, state.players[1]), "The next frog comes into view during the handoff");
+  assert.ok(Math.abs(arrived.x - destination.x) < 50, "The handoff settles promptly");
   assert.ok(switched.x >= 0 && switched.x + switched.width <= state.width);
   assert.ok(switched.y >= 0 && switched.y + switched.height <= state.height);
+});
+
+test("large moves of the same target pan smoothly at different frame rates", () => {
+  const state = new GameEngine().state;
+  const frog = state.players.find((p) => p.id === state.activePlayerId)!;
+  const start = followCamera(null, state, 1280, 800, 1 / 60);
+  frog.x = state.width - 500;
+  const destination = followCamera(null, state, 1280, 800, 1 / 60);
+  assert.ok(destination.x - start.x > 1400, "Exercise the former teleport threshold");
+  assert.deepEqual(followCamera(start, state, 1280, 800, 0), start, "No elapsed time means no camera movement");
+  const arrivals = [30, 60, 120].map((fps) => {
+    let camera = start;
+    for (let i = 0; i < fps / 2; i++) {
+      const next = followCamera(camera, state, 1280, 800, 1 / fps);
+      assert.ok(next.x > camera.x && next.x < destination.x, "Each frame approaches without snapping or overshooting");
+      camera = next;
+    }
+    assert.ok(visible(camera, frog), "The distant frog comes into view within half a second");
+    return camera;
+  });
+  for (const camera of arrivals) assert.ok(Math.abs(camera.x - arrivals[0].x) < 1e-8,
+    "Equal elapsed time gives the same pan at different frame rates");
 });
 
 test("aim conversion respects camera translation, zoom, and resized viewports", () => {
@@ -120,8 +147,12 @@ test("damage recipients get a smooth camera handoff and are framed before subtra
   state.phase = "playing";
   state.activePlayerId = state.players[0].id;
   const nextTurn = followCamera(arrived, state, 1280, 800, 1 / 60);
+  const nextDestination = followCamera(null, state, 1280, 800, 1 / 60);
   assert.equal(nextTurn.targetId, state.players[0].id);
-  assert.ok(visible(nextTurn, state.players[0]), "The next turn immediately frames its controllable frog");
+  assert.ok(nextTurn.x < arrived.x && nextTurn.x > nextDestination.x, "Returning to play pans without snapping");
+  assert.ok(nextTurn.zoom < arrived.zoom && nextTurn.zoom > nextDestination.zoom, "Returning to play also eases the zoom");
+  const nextArrived = settleCamera(state, nextTurn);
+  assert.ok(visible(nextArrived, state.players[0]), "The handoff reaches the next controllable frog");
 });
 
 test("zooming action cameras preserve aim conversion and mobile world bounds", () => {
