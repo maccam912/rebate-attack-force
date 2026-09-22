@@ -8,6 +8,7 @@ export type LobbyState = {
   hostId: string;
   players: Team[];
   started: boolean;
+  maxTeams: number | null;
 };
 
 type Callbacks = {
@@ -96,6 +97,12 @@ export class RoomConnection {
   }
   configureTeam(teamId: string, settings: TeamSettings) {
     if (this.connected) this.room?.send("teamSettings", { teamId, ...settings });
+  }
+  addBot() {
+    if (this.connected) this.room?.send("addBot");
+  }
+  removeBot(teamId: string) {
+    if (this.connected) this.room?.send("removeBot", { teamId });
   }
 
   async leave(): Promise<void> {

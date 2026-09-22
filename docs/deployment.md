@@ -11,7 +11,9 @@ npm run dev
 
 Open `http://localhost:5173`. Create a room and share its invite URL with another browser. The development server proxies `/rooms` (HTTP and WebSocket) to port 2567, removing that prefix. Production uses the page's own origin with no prefix, so deployments need no baked-in hostnames. An optional build-time `VITE_ROOM_SERVER` can point at a separately hosted Colyseus endpoint.
 
-Anonymous names are limited to 20 characters. Each room supports 2–4 players, has a host who starts/restarts matches, and is private to people with its generated room ID. A link is an invitation, not an authentication credential. Joining locks when a match starts. Leaving forfeits the player; host status moves to the next guest. Brief network drops have a 15-second reconnection window while the tab remains open. Page reloads create a new session rather than restoring a match seat.
+Anonymous names are limited to 20 characters. Each room needs at least two connected teams to start, including any bots added by the host. A single human can play against bots. The human host starts/restarts matches, adds/removes bots before starting, and configures each team's frog count and HP. Rooms are private to people with their generated room ID. A link is an invitation, not an authentication credential. Joining locks when a match starts. Leaving forfeits the team; host status moves to the next connected human. Brief drops reconnect automatically, and saved browser reconnect tokens restore seats after reloads. Bots never become host. Simulation pauses when all humans disconnect, and abandoned rooms are discarded after 30 minutes.
+
+Set **`MAX_TEAMS`** to an integer of at least 2 to cap teams per room according to your server's resources. It counts humans, bots, and reserved disconnected human seats. An unset or empty value applies no team cap; invalid values fail startup. The limit comes from server configuration and cannot be overridden by room creation requests. Extra teams use additional spawn ledges, and very large rosters expand the map horizontally. Choose a capacity based on measured simulation and snapshot load for your hardware and desired frogs per team.
 
 ## Container
 
@@ -19,6 +21,8 @@ Anonymous names are limited to 20 characters. Each room supports 2–4 players, 
 docker build -t rebate-attack-force:0.1.0 .
 docker run --rm -p 2567:2567 rebate-attack-force:0.1.0
 ```
+
+For example, add `-e MAX_TEAMS=12` to the `docker run` command to allow up to twelve human/bot teams per room. In Kubernetes, set the same environment variable on the deployment's container.
 
 Open `http://localhost:2567`. The image runs as a non-root user and includes only production dependencies and built client files plus the TypeScript server/shared engine. `tsx` is a production dependency. The process handles `SIGTERM`/`SIGINT`, marks readiness unavailable, and closes rooms and sockets through Colyseus' graceful shutdown API.
 

@@ -11,6 +11,7 @@
     "start": "tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:browser": "node scripts/browser-smoke.mjs",
+    "test:bots": "node scripts/bots-smoke.mjs",
     "test:mobile": "node scripts/mobile-smoke.mjs",
     "test:audio": "node scripts/audio-smoke.mjs",
     "typecheck": "tsc --noEmit",

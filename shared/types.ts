@@ -32,6 +32,8 @@ export interface Team extends TeamSettings {
   name: string;
   color: string;
   connected: boolean;
+  /** Bot teams use the same turn and combat rules, without a client connection. */
+  bot?: boolean;
 }
 
 export interface Platform {
@@ -193,7 +195,7 @@ export type GameCommand = {
 };
 
 export interface GameOptions {
-  players?: { id: string; name: string; color?: string; frogs?: number; hp?: number; connected?: boolean }[];
+  players?: { id: string; name: string; color?: string; frogs?: number; hp?: number; connected?: boolean; bot?: boolean }[];
   mode?: GameMode;
   seed?: number;
 }

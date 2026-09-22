@@ -13,7 +13,7 @@ import type {
 } from "./types.js";
 
 import { ropeFixedLength, ropePathLength, updateRopePath } from "./rope.js";
-import { teamSettings } from "./settings.js";
+import { teamColor, teamSettings } from "./settings.js";
 import { createInventory, WEAPON_CATALOG, WEAPON_IDS, type WeaponDefinition } from "./weapons.js";
 import type { GameSnapshot } from "./protocol.js";
 import { applyImpulse, GRAVITY, WALK_SPEED, HARD_IMPACT_SPEED, limitBodySpeed, surfaceImpact, updateBodyAttitude } from "./physics.js";
@@ -36,7 +36,6 @@ export const MAX_SOUND_EVENTS = 128;
 
 // A normal jump can land on a frog; a longer fall becomes a stomp.
 const STOMP_SPEED = 560;
-const COLORS = ["#9fe870", "#ffb86b", "#b9a2ff", "#71dce4"];
 
 const clamp = (value: number, low: number, high: number) =>
   Math.max(low, Math.min(high, value));
@@ -61,10 +60,20 @@ export const SPAWNS = [
 ];
 
 function frogSpawn(teamIndex: number, frogIndex: number): Point {
-  const spawn = SPAWNS[teamIndex]!;
-  const direction = teamIndex === 1 || teamIndex === 3 ? -1 : 1;
-  // The quarry's shorter starting ledge needs tighter spacing for six frogs.
-  return { x: spawn.x + direction * frogIndex * (teamIndex === 3 ? 42 : 64), y: spawn.y };
+  const slot = teamIndex % SPAWN_PLATFORMS.length;
+  const offset = Math.floor(teamIndex / SPAWN_PLATFORMS.length) * WIDTH;
+  if (slot < SPAWNS.length) {
+    const spawn = SPAWNS[slot]!;
+    const direction = slot === 1 || slot === 3 ? -1 : 1;
+    // Preserve the original starting positions and room for six frogs per team.
+    return { x: offset + spawn.x + direction * frogIndex * (slot === 3 ? 42 : 64), y: spawn.y };
+  }
+  const platform = SPAWN_PLATFORMS[slot]!;
+  const spacing = Math.min(42, (platform.w - PLAYER_RADIUS * 2 - 8) / 5);
+  return {
+    x: offset + platform.x + platform.w / 2 + (frogIndex - 2.5) * spacing,
+    y: platform.y - PLAYER_RADIUS,
+  };
 }
 
 export function makePlatforms(): Platform[] {
@@ -101,6 +110,27 @@ export function makePlatforms(): Platform[] {
   ];
 }
 
+const BASE_PLATFORMS = makePlatforms();
+const ORIGINAL_SPAWN_IDS = ["west-island", "east-island", "foundry", "quarry"];
+const SPAWN_PLATFORMS = [
+  ...ORIGINAL_SPAWN_IDS.map((id) => BASE_PLATFORMS.find((platform) => platform.id === id)!),
+  ...BASE_PLATFORMS.filter((platform) => !ORIGINAL_SPAWN_IDS.includes(platform.id)),
+];
+
+/** Use spare ledges first; expand the scrapyard instead of overlapping extra teams. */
+function makeArena(teamCount: number): { width: number; platforms: Platform[] } {
+  const sections = Math.ceil(teamCount / SPAWN_PLATFORMS.length);
+  return {
+    width: WIDTH * sections,
+    platforms: Array.from({ length: sections }, (_, section) =>
+      BASE_PLATFORMS.map((platform) => ({
+        ...platform,
+        id: section === 0 ? platform.id : `${platform.id}:${section}`,
+        x: platform.x + section * WIDTH,
+      }))).flat(),
+  };
+}
+
 /** An authoritative, JSON-only simulation shared by the browser and room server. */
 export class GameEngine {
   state: GameState;
@@ -116,25 +146,27 @@ export class GameEngine {
   constructor(options: GameOptions = {}) {
     this.randomSeed = finite(options.seed, 7351) >>> 0 || 1;
     const definitions = options.players?.length
-      ? options.players.slice(0, 4)
+      ? [...options.players]
       : [
-          { id: "p1", name: "Moss", color: COLORS[0] },
-          { id: "p2", name: "Tangerine", color: COLORS[1] },
+          { id: "p1", name: "Moss", color: teamColor(0) },
+          { id: "p2", name: "Tangerine", color: teamColor(1) },
         ];
     // A practice target remains available even when a room supplies a single player.
     if (definitions.length === 1)
       definitions.push({
         id: "practice-target",
         name: "Target",
-        color: COLORS[1],
+        color: teamColor(1),
       });
     const teams = definitions.map((definition, index) => ({
       id: definition.id,
       name: definition.name,
-      color: definition.color ?? COLORS[index]!,
+      color: definition.color ?? teamColor(index),
       connected: definition.connected !== false,
+      bot: definition.bot === true,
       ...teamSettings({ frogs: definition.frogs ?? 1, hp: definition.hp ?? 100 }),
     }));
+    const arena = makeArena(teams.length);
     const players: Player[] = teams.flatMap((team, index) =>
       Array.from({ length: team.frogs }, (_, frog): Player => {
         const spawn = frogSpawn(index, frog);
@@ -149,7 +181,7 @@ export class GameEngine {
           vy: 0,
           hp: team.hp,
           maxHp: team.hp,
-          facing: spawn.x < WIDTH / 2 ? 1 : -1,
+          facing: spawn.x < arena.width / 2 ? 1 : -1,
           alive: true,
           grounded: true,
           lookAt: { x: spawn.x + 200, y: spawn.y - 220 },
@@ -166,10 +198,10 @@ export class GameEngine {
     const firstTeam = teams.find((team) => team.connected) ?? teams[0]!;
     const firstFrog = players.find((player) => player.teamId === firstTeam.id)!;
     this.state = {
-      width: WIDTH,
+      width: arena.width,
       height: HEIGHT,
       waterY: WATER_Y,
-      platforms: makePlatforms(),
+      platforms: arena.platforms,
       players,
       teams,
       crates: [],
@@ -240,8 +272,8 @@ export class GameEngine {
       right: input.right === true,
       up: input.up === true,
       down: input.down === true,
-      aimX: clamp(finite(input.aimX, prior.aimX), -WIDTH, WIDTH * 2),
-      aimY: clamp(finite(input.aimY, prior.aimY), -HEIGHT, HEIGHT * 2),
+      aimX: clamp(finite(input.aimX, prior.aimX), -this.state.width, this.state.width * 2),
+      aimY: clamp(finite(input.aimY, prior.aimY), -this.state.height, this.state.height * 2),
     };
     this.inputs.set(id, next);
     player.lookAt = { x: next.aimX, y: next.aimY };
@@ -577,7 +609,7 @@ export class GameEngine {
         this.state.winnerId = winner?.id ?? null;
         this.state.timeLeft = 0;
         this.state.message = winner ? `${winner.name} wins the rebate!` : "Everyone took the plunge. Draw!";
-        this.sound("victory", survivors[0] ?? { x: WIDTH / 2, y: HEIGHT / 2 },
+        this.sound("victory", survivors[0] ?? { x: this.state.width / 2, y: this.state.height / 2 },
           survivors[0] ? { playerId: survivors[0].id } : {});
         return;
       }
@@ -813,7 +845,7 @@ export class GameEngine {
       }
     };
     for (let step = 0; step < steps; step++) {
-      let nextX = clamp(player.x + stepX, PLAYER_RADIUS, WIDTH - PLAYER_RADIUS);
+      let nextX = clamp(player.x + stepX, PLAYER_RADIUS, this.state.width - PLAYER_RADIUS);
       let hitX = 0;
       for (const platform of this.state.platforms) {
         const overlapsY =
@@ -837,7 +869,7 @@ export class GameEngine {
         }
       }
       if (nextX <= PLAYER_RADIUS && stepX < 0) hitX = 1;
-      else if (nextX >= WIDTH - PLAYER_RADIUS && stepX > 0) hitX = -1;
+      else if (nextX >= this.state.width - PLAYER_RADIUS && stepX > 0) hitX = -1;
       if (hitX) { contact(hitX, 0); stepX = 0; }
       player.x = nextX;
 
@@ -946,11 +978,11 @@ export class GameEngine {
         vy: direction.y * definition.speed * power - 65, kind: weapon as "mine" | "springMine",
         placedTurn: this.state.turn, fuse: null, settled: false });
     } else if (definition.attack === "airstrike") {
-      const center = clamp(input.aimX, 24, WIDTH - 24);
+      const center = clamp(input.aimX, 24, this.state.width - 24);
       for (let index = 0; index < definition.pellets; index++) {
         const offset = (index - (definition.pellets - 1) / 2) * definition.spread;
         this.state.projectiles.push({ id: this.id("shot"), ownerId: player.id,
-          x: clamp(center + offset, 12, WIDTH - 12), y: -100 - index * 85,
+          x: clamp(center + offset, 12, this.state.width - 12), y: -100 - index * 85,
           vx: weapon === "airstrike" ? 38 : 0, vy: definition.speed,
           kind: weapon, life: definition.life, radius: definition.radius, damage: definition.damage,
           variant: "strike", age: 0 });
@@ -1061,9 +1093,9 @@ export class GameEngine {
             projectile.vx *= -definition.bounce;
           }
         }
-        if (contact === "bounce" && (projectile.x < bodyRadius || projectile.x > WIDTH - bodyRadius)) {
+        if (contact === "bounce" && (projectile.x < bodyRadius || projectile.x > this.state.width - bodyRadius)) {
           contactSpeed = Math.max(contactSpeed, Math.abs(projectile.vx));
-          projectile.x = clamp(projectile.x, bodyRadius, WIDTH - bodyRadius);
+          projectile.x = clamp(projectile.x, bodyRadius, this.state.width - bodyRadius);
           projectile.vx *= -definition.bounce;
         }
       }
@@ -1071,7 +1103,7 @@ export class GameEngine {
         { weapon: projectile.kind, intensity: clamp(contactSpeed / 1000, 0.15, 1) });
       if (projectile.y >= WATER_Y) this.sound("splash", projectile,
         { weapon: projectile.kind, intensity: 0.4 });
-      if (projectile.y >= WATER_Y || projectile.x < -100 || projectile.x > WIDTH + 100 || projectile.y < -650) continue;
+      if (projectile.y >= WATER_Y || projectile.x < -100 || projectile.x > this.state.width + 100 || projectile.y < -650) continue;
       if (detonate || projectile.life <= 0) {
         this.explode(projectile.x, projectile.y, projectile.radius, projectile.damage,
           undefined, definition, undefined, isFragment ? 0.65 : 1);
@@ -1104,7 +1136,7 @@ export class GameEngine {
         const steps = Math.max(1, Math.ceil(Math.hypot(mine.vx, mine.vy) * dt / 4));
         for (let step = 0; step < steps && !mine.settled; step++) {
           const px = mine.x, py = mine.y;
-          mine.x = clamp(mine.x + mine.vx * dt / steps, 8, WIDTH - 8);
+          mine.x = clamp(mine.x + mine.vx * dt / steps, 8, this.state.width - 8);
           mine.y += mine.vy * dt / steps;
           const platform = this.state.platforms.find((p) => mine.x + 8 >= p.x && mine.x - 8 <= p.x + p.w && mine.y + 8 >= p.y && mine.y - 8 <= p.y + p.h);
           if (!platform) continue;

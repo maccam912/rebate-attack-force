@@ -1,5 +1,6 @@
 import "./style.css";
 import { DOUBLE_JUMP_SECONDS, GRAPPLE_RANGE, GameEngine } from "../shared/game";
+import { BotController } from "../shared/bots";
 import type {
   GameState,
   PlayerInput,
@@ -16,7 +17,7 @@ import { GameAudio, type SoundName } from "./audio";
 import { GameSoundDirector } from "./game-audio";
 import { createTouchControls } from "./touch-controls";
 
-import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, validTeamSettings } from "../shared/settings";
+import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, teamColor, validTeamSettings } from "../shared/settings";
 
 const logo = `<svg viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M5 30 17 8l16 5 15-3 11 22-8 22H17Z" fill="#cde47b"/><path d="M17 40c-5-17 5-24 15-18 11-7 22 3 17 18-9 10-24 10-32 0Z" fill="#18372a"/><circle cx="24" cy="27" r="5" fill="#e5ebbd"/><circle cx="41" cy="27" r="5" fill="#e5ebbd"/><circle cx="25" cy="27" r="2" fill="#18372a"/><circle cx="40" cy="27" r="2" fill="#18372a"/><path d="M27 38q6 5 12-1" stroke="#d0e77e" stroke-width="2" stroke-linecap="round"/><path d="m9 47-5 9 15-2M51 50l8 7 3-15" fill="#cde47b"/></svg>`;
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -43,7 +44,7 @@ app.innerHTML = `
   <div class="menu-backdrop" id="menu-overlay"><section class="panel menu-panel" aria-label="Game menu"><div class="menu-brand">${logo}<h1>REBATE <span>ATTACK FORCE</span></h1></div><button class="secondary-button" id="resume-button" hidden>Resume game <span>Esc</span></button><div id="play-panel"></div><div class="connection-status" id="connection-status">THE SCRAPYARD IS OPEN</div></section></div>
   <div class="match-over" id="match-over" hidden><div><div class="eyebrow">THE SCRAPYARD HAS SPOKEN</div><h2 id="winner-name"></h2><button class="primary-button" id="rematch-button">Run it back <span>↗</span></button></div></div>
 </main>
-<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. Retreat while your shot travels or its fuse burns. A melee hit or explosion ends your control, and the camera follows the fallout. Damage adds up through launches, collisions, and wall hits, then appears one frog at a time after everyone settles. Knocked-out frogs burst and can start another chain reaction. Your own movement and landings are safe; water is a one-way trip.</p><p class="touch-help"><strong>On your phone:</strong> use the left pad to walk and pump a swing; drag it up or down to reel the rope. Drag the right pad to aim, or tap the arena to mark a target. Tap Hook to attach and Release to let go. Tap Jump twice quickly to backflip. Choose a weapon in Arsenal, then hold Fire to charge and release to shoot. Landscape gives you a wider view.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Mines arm on later turns; approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares one device. Online mode gives you a private room link for 2–4 players. The host chooses each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice returns control to you after the fallout and respawns knocked-out frogs. These maps, frogs, and synthesized sound effects are original. Use the ♪ button to mute or enable sound.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
+<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. Retreat while your shot travels or its fuse burns. A melee hit or explosion ends your control, and the camera follows the fallout. Damage adds up through launches, collisions, and wall hits, then appears one frog at a time after everyone settles. Knocked-out frogs burst and can start another chain reaction. Your own movement and landings are safe; water is a one-way trip.</p><p class="touch-help"><strong>On your phone:</strong> use the left pad to walk and pump a swing; drag it up or down to reel the rope. Drag the right pad to aim, or tap the arena to mark a target. Tap Hook to attach and Release to let go. Tap Jump twice quickly to backflip. Choose a weapon in Arsenal, then hold Fire to charge and release to shoot. Landscape gives you a wider view.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Mines arm on later turns; approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares one device, with humans or AI bots. Online mode gives you a private room link; the server sets its team capacity. The host can add bots and choose each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice returns control to you after the fallout and respawns knocked-out frogs. These maps, frogs, and synthesized sound effects are original. Use the ♪ button to mute or enable sound.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -69,6 +70,12 @@ let lastEnter = -Infinity;
 const localTeams: Record<string, TeamSettings> = {
   p1: { ...DEFAULT_TEAM_SETTINGS }, p2: { ...DEFAULT_TEAM_SETTINGS },
 };
+const localRoster = [
+  { id: "p1", name: "Sprout", bot: false },
+  { id: "p2", name: "Rusty", bot: false },
+];
+let nextLocalId = 3;
+let localBots = new BotController();
 let aim = { x: 440, y: 1400 };
 let pointer: { x: number; y: number } | null = null;
 const coarsePointer = matchMedia("(any-pointer: coarse)");
@@ -176,11 +183,15 @@ function announce(message: string) {
 function active() {
   return state.players.find((p) => p.id === state.activePlayerId);
 }
+function botTurn() {
+  return !!state.teams.find((team) => team.id === state.activeTeamId)?.bot;
+}
 function canControl() {
   return (
     screen === "playing" &&
     !menuOpen && $("guide").hidden &&
     (state.phase === "playing" || state.phase === "retreat") &&
+    !botTurn() &&
     (!network || network.canControl)
   );
 }
@@ -273,17 +284,38 @@ function modeLabel() {
   return selectedMode === "practice"
     ? "PRACTICE RUN"
     : selectedMode === "local"
-      ? "LOCAL HOT-SEAT"
+      ? "LOCAL MATCH"
       : "PRIVATE ROOM";
 }
 function settingsMarkup(id: string, name: string, settings: TeamSettings, editable: boolean) {
   return `<fieldset class="team-settings" data-team="${escapeHtml(id)}"><legend>${escapeHtml(name)} · team setup</legend><label>Frogs<input type="number" data-setting="frogs" aria-label="${escapeHtml(name)} frogs" min="1" max="${MAX_FROGS}" step="1" required value="${settings.frogs}" ${editable ? "" : "disabled"}></label><label>HP per frog<input type="number" data-setting="hp" aria-label="${escapeHtml(name)} HP per frog" min="1" max="${MAX_HP}" step="1" required value="${settings.hp}" ${editable ? "" : "disabled"}></label></fieldset>`;
+}
+function localSetupMarkup() {
+  return `<div class="roster local-roster">${localRoster.map((team, index) => {
+    const name = team.id === "p1" ? playerName : team.name;
+    return `<div class="lobby-team"><div class="player-row"><span class="avatar" style="color:${teamColor(index)}">♟</span><div class="player-info"><strong>${escapeHtml(name)}</strong>${team.id === "p1" ? "<small>You · Human</small>" : `<label class="controller-label">Controlled by<select data-local-control="${team.id}" aria-label="${escapeHtml(name)} controller"><option value="human" ${team.bot ? "" : "selected"}>Human</option><option value="bot" ${team.bot ? "selected" : ""}>AI bot</option></select></label>`}</div>${team.id !== "p1" && localRoster.length > 2 ? `<button class="remove-team" data-remove-local="${team.id}" aria-label="Remove ${escapeHtml(name)}">Remove</button>` : ""}</div>${settingsMarkup(team.id, name, localTeams[team.id], true)}</div>`;
+  }).join("")}</div><div class="team-actions"><button class="secondary-button" id="add-local-player">Add player</button><button class="secondary-button" id="add-local-bot">Add bot</button></div>`;
+}
+function addLocalTeam(bot: boolean) {
+  if (!validSetup()) return;
+  saveName();
+  const number = nextLocalId++;
+  const id = `p${number}`;
+  localRoster.push({ id, name: `${bot ? "Bot" : "Player"} ${number}`, bot });
+  localTeams[id] = { ...DEFAULT_TEAM_SETTINGS };
+  renderPanel();
+  $("start-button").scrollIntoView({ block: "nearest" });
 }
 function validSetup() {
   return Array.from($("play-panel").querySelectorAll<HTMLInputElement>("[data-setting]")).every((input) => input.reportValidity());
 }
 $("play-panel").addEventListener("change", (event) => {
   const field = event.target;
+  if (field instanceof HTMLSelectElement && field.dataset.localControl) {
+    const team = localRoster.find((candidate) => candidate.id === field.dataset.localControl);
+    if (team) team.bot = field.value === "bot";
+    return;
+  }
   if (!(field instanceof HTMLInputElement) || !field.dataset.setting) return;
   const group = field.closest<HTMLFieldSetElement>("[data-team]")!;
   const settings = {
@@ -297,7 +329,7 @@ $("play-panel").addEventListener("change", (event) => {
 function rosterMarkup() {
   return state.teams.map((team) => {
     const frogs = state.players.filter((p) => p.teamId === team.id);
-    return `<div class="team-roster"><div class="team-heading" style="color:${team.color}">${escapeHtml(team.name)}${network?.sessionId === team.id ? " · you" : ""}<small>${frogs.filter((p) => p.alive).length}/${frogs.length} alive${team.connected ? "" : " · Offline · turns skipped"}</small></div>${frogs.map((p) =>
+    return `<div class="team-roster"><div class="team-heading" style="color:${team.color}">${escapeHtml(team.name)}${team.bot ? " · AI bot" : network?.sessionId === team.id ? " · you" : ""}<small>${frogs.filter((p) => p.alive).length}/${frogs.length} alive${team.connected ? "" : " · Offline · turns skipped"}</small></div>${frogs.map((p) =>
       `<div class="player-row ${p.id === state.activePlayerId ? "current-player" : ""} ${p.alive ? "" : "dead"}"><div class="avatar" style="color:${p.color}">♟</div><div class="player-info"><strong>Frog ${p.number}</strong><small>${!p.alive ? "Out of the action" : !team.connected ? "Waiting to rejoin" : p.id === state.activePlayerId ? "Making trouble" : "Biding their time"}</small></div><span class="player-hp">${Math.ceil(p.hp)}<small> / ${p.maxHp}</small></span></div>`).join("")}</div>`;
   }).join("");
 }
@@ -307,7 +339,7 @@ function renderPanel() {
   menuOpen = false;
   syncMenu();
   if (screen === "menu") {
-    panel.innerHTML = `<div class="panel-title"><h2>Pick your trouble.</h2><span class="tiny-tag">LET’S PLAY</span></div><div class="mode-tabs" role="tablist" aria-label="Game mode">${(["practice", "local", "online"] as const).map((m) => `<button class="mode-tab ${m === selectedMode ? "active" : ""}" role="tab" aria-selected="${m === selectedMode}" data-mode="${m}">${m === "practice" ? "Practice" : m === "local" ? "Local" : "Online"}</button>`).join("")}</div><label class="input-label" for="player-name">YOUR CALLSIGN</label><input class="text-input" id="player-name" maxlength="20" value="${escapeHtml(playerName)}" autocomplete="nickname" placeholder="A perfectly normal frog"/><p class="mode-description">${selectedMode === "practice" ? "Find your swing. Try the weapons. Your patient target frog won’t hold a grudge." : selectedMode === "local" ? "Two teams. One device. Take turns making life difficult for a nearby friend." : "Make a private room, send the link, and bring up to three friends. No sign-up required."}</p>${selectedMode === "local" ? settingsMarkup("p1", playerName, localTeams.p1, true) + settingsMarkup("p2", "Rusty", localTeams.p2, true) : ""}<button class="primary-button" id="start-button" ${busy ? "disabled" : ""}>${busy ? "Connecting…" : selectedMode === "practice" ? "Start practice" : selectedMode === "local" ? "Start local match" : "Create a room"} <span>↗</span></button>${selectedMode === "online" ? '<div class="join-fields"><input class="text-input" id="room-code-input" aria-label="Room code or invite link" placeholder="Have a room code?" maxlength="200"/><button id="join-button">Join</button></div>' : ""}<div class="anonymous-note">${selectedMode === "online" ? "↗ Share a link. Skip the sign-up." : touchEnabled ? "⌁ Thumb controls ready · Try landscape for a wider view" : "⌁ Keyboard + mouse controls"}</div>`;
+    panel.innerHTML = `<div class="panel-title"><h2>Pick your trouble.</h2><span class="tiny-tag">LET’S PLAY</span></div><div class="mode-tabs" role="tablist" aria-label="Game mode">${(["practice", "local", "online"] as const).map((m) => `<button class="mode-tab ${m === selectedMode ? "active" : ""}" role="tab" aria-selected="${m === selectedMode}" data-mode="${m}">${m === "practice" ? "Practice" : m === "local" ? "Local" : "Online"}</button>`).join("")}</div><label class="input-label" for="player-name">YOUR CALLSIGN</label><input class="text-input" id="player-name" maxlength="20" value="${escapeHtml(playerName)}" autocomplete="nickname" placeholder="A perfectly normal frog"/><p class="mode-description">${selectedMode === "practice" ? "Find your swing. Try the weapons. Your patient target frog won’t hold a grudge." : selectedMode === "local" ? "One device, as many teams as you like. Share turns with friends or choose AI bots to play solo." : "Make a private room for friends and AI bots. The server sets the team capacity. No sign-up required."}</p>${selectedMode === "local" ? localSetupMarkup() : ""}<button class="primary-button" id="start-button" ${busy ? "disabled" : ""}>${busy ? "Connecting…" : selectedMode === "practice" ? "Start practice" : selectedMode === "local" ? "Start local match" : "Create a room"} <span>↗</span></button>${selectedMode === "online" ? '<div class="join-fields"><input class="text-input" id="room-code-input" aria-label="Room code or invite link" placeholder="Have a room code?" maxlength="200"/><button id="join-button">Join</button></div>' : ""}<div class="anonymous-note">${selectedMode === "online" ? "↗ Share a link. Skip the sign-up." : touchEnabled ? "⌁ Thumb controls ready · Try landscape for a wider view" : "⌁ Keyboard + mouse controls"}</div>`;
     panel.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(
       (b) =>
         (b.onclick = () => {
@@ -316,6 +348,22 @@ function renderPanel() {
           renderPanel();
         }),
     );
+    if (selectedMode === "local") {
+      $("add-local-player").onclick = () => addLocalTeam(false);
+      $("add-local-bot").onclick = () => addLocalTeam(true);
+      panel.querySelectorAll<HTMLButtonElement>("[data-remove-local]").forEach((button) => {
+        button.onclick = () => {
+          if (!validSetup()) return;
+          saveName();
+          const index = localRoster.findIndex((team) => team.id === button.dataset.removeLocal);
+          if (index > 0 && localRoster.length > 2) {
+            delete localTeams[localRoster[index].id];
+            localRoster.splice(index, 1);
+            renderPanel();
+          }
+        };
+      });
+    }
     const savedRoom = new URL(location.href).searchParams.get("room");
     if (selectedMode === "online" && savedRoom && savedSeat(savedRoom)) {
       panel.insertAdjacentHTML("beforeend", `<button class="secondary-button" id="rejoin-button" ${busy ? "disabled" : ""}>Rejoin your team</button>`);
@@ -340,12 +388,20 @@ function renderPanel() {
   } else if (screen === "lobby" && lobby) {
     const host = lobby.hostId === network?.sessionId;
     const ready = lobby.players.filter((p) => p.connected).length;
-    panel.innerHTML = `<div class="panel-title"><h2>Build your teams.</h2><span class="tiny-tag">${lobby.players.length}/4 TEAMS</span></div><div class="session-title"><i class="live-dot"></i> Private room · no accounts</div><div class="room-code"><code>${escapeHtml(lobby.roomId)}</code><button class="copy-button" id="copy-invite">Copy invite</button></div><div class="roster">${lobby.players.map((p) => `<div class="lobby-team"><div class="player-row"><span class="avatar" style="color:${p.color}">♟</span><div class="player-info"><strong>${escapeHtml(p.name)}${p.id === network?.sessionId ? " · you" : ""}</strong><small>${!p.connected ? "Offline · seat saved" : p.id === lobby?.hostId ? "Room host" : "Ready for trouble"}</small></div></div>${settingsMarkup(p.id, p.name, p, host)}</div>`).join("")}</div><p class="waiting">${ready < 2 ? "Invite a friend. Two connected teams are needed to start." : host ? "Choose each team’s frogs and starting HP, then start when ready." : "The host chooses each team’s frogs and starting HP."} Living frogs take turns in order.</p><button class="primary-button" id="launch-room" ${!host || ready < 2 ? "disabled" : ""}>${host ? "Start the match" : "Waiting for host"} <span>↗</span></button><button class="secondary-button" id="leave-button">Leave room</button>`;
+    const full = typeof lobby.maxTeams === "number" && lobby.players.length >= lobby.maxTeams;
+    const teamCount = `${lobby.players.length}${typeof lobby.maxTeams === "number" ? `/${lobby.maxTeams}` : ""} TEAMS`;
+    panel.innerHTML = `<div class="panel-title"><h2>Build your teams.</h2><span class="tiny-tag">${teamCount}</span></div><div class="session-title"><i class="live-dot"></i> Private room · no accounts</div><div class="room-code"><code>${escapeHtml(lobby.roomId)}</code><button class="copy-button" id="copy-invite">Copy invite</button></div><div class="roster">${lobby.players.map((p) => `<div class="lobby-team"><div class="player-row"><span class="avatar" style="color:${p.color}">♟</span><div class="player-info"><strong>${escapeHtml(p.name)}${p.id === network?.sessionId ? " · you" : ""}</strong><small>${p.bot ? "AI bot · ready" : !p.connected ? "Offline · seat saved" : p.id === lobby?.hostId ? "Room host" : "Ready for trouble"}</small></div>${host && p.bot ? `<button class="remove-team" data-remove-bot="${escapeHtml(p.id)}" aria-label="Remove ${escapeHtml(p.name)}">Remove bot</button>` : ""}</div>${settingsMarkup(p.id, p.name, p, host)}</div>`).join("")}</div>${host ? `<button class="secondary-button" id="add-bot" ${full ? "disabled" : ""}>${full ? "Server team capacity reached" : "Add bot"}</button>` : ""}<p class="waiting">${ready < 2 ? host ? "Add a bot or invite a friend. Two ready teams are needed to start." : "The host can add a bot or invite another player to start." : host ? "Choose each team’s frogs and starting HP, then start when ready." : "The host chooses each team’s frogs and starting HP."} Living frogs take turns in order.</p><button class="primary-button" id="launch-room" ${!host || ready < 2 ? "disabled" : ""}>${host ? "Start the match" : "Waiting for host"} <span>↗</span></button><button class="secondary-button" id="leave-button">Leave room</button>`;
     $("copy-invite").onclick = copyInvite;
+    if (host) {
+      $("add-bot").onclick = () => { if (validSetup()) network?.addBot(); };
+      panel.querySelectorAll<HTMLButtonElement>("[data-remove-bot]").forEach((button) => {
+        button.onclick = () => network?.removeBot(button.dataset.removeBot!);
+      });
+    }
     $("launch-room").onclick = () => { if (validSetup()) network?.start(); };
     $("leave-button").onclick = () => void leaveToMenu();
   } else {
-    panel.innerHTML = `<div class="panel-title"><h2>The troublemakers.</h2><span class="tiny-tag">${modeLabel()}</span></div><div class="session-title"><i class="live-dot"></i> ${network ? "Connected · server rules" : selectedMode === "practice" ? "Your very own testing ground" : "Pass the device each turn"}</div><div class="roster" id="roster">${rosterMarkup()}</div><div class="weapon-card"><div class="weapon-label" id="weapon-label">YOUR STASH · UNUSED AMMO CARRIES</div><div class="weapon-name" id="weapon-name">Crate required</div><div class="weapon-note" id="weapon-note">Find a crate to get your hands on something irresponsible.</div></div>${network ? '<button class="secondary-button" id="copy-invite">Copy room link</button>' : ""}<button class="secondary-button" id="leave-button">${network ? "Leave match · forfeit team" : "Back to camp"}</button>`;
+    panel.innerHTML = `<div class="panel-title"><h2>The troublemakers.</h2><span class="tiny-tag">${modeLabel()}</span></div><div class="session-title"><i class="live-dot"></i> ${network ? "Connected · server rules" : selectedMode === "practice" ? "Your very own testing ground" : state.teams.some((team) => team.bot) ? "Local match · AI bots play their own turns" : "Pass the device each turn"}</div><div class="roster" id="roster">${rosterMarkup()}</div><div class="weapon-card"><div class="weapon-label" id="weapon-label">YOUR STASH · UNUSED AMMO CARRIES</div><div class="weapon-name" id="weapon-name">Crate required</div><div class="weapon-note" id="weapon-note">Find a crate to get your hands on something irresponsible.</div></div>${network ? '<button class="secondary-button" id="copy-invite">Copy room link</button>' : ""}<button class="secondary-button" id="leave-button">${network ? "Leave match · forfeit team" : "Back to camp"}</button>`;
     $("leave-button").onclick = () => void leaveToMenu();
     if (network) $("copy-invite").onclick = copyInvite;
 
@@ -384,14 +440,9 @@ function startLocal() {
   engine = new GameEngine({
     mode: selectedMode === "practice" ? "practice" : "versus",
     seed: crypto.getRandomValues(new Uint32Array(1))[0],
-    players: [
-      { id: "p1", name: playerName, ...(selectedMode === "local" ? localTeams.p1 : {}) },
-      {
-        id: "p2",
-        name: selectedMode === "practice" ? "Target practice" : "Rusty",
-        ...(selectedMode === "local" ? localTeams.p2 : {}),
-      },
-    ],
+    players: selectedMode === "local"
+      ? localRoster.map((team) => ({ ...team, name: team.id === "p1" ? playerName : team.name, ...localTeams[team.id] }))
+      : [{ id: "p1", name: playerName }, { id: "p2", name: "Target practice" }],
   });
   state = engine.state;
   screen = "playing";
@@ -401,6 +452,7 @@ function startLocal() {
   canvas.focus();
 }
 function resetObserved() {
+  localBots = new BotController();
   clearInputs();
   arsenalOpen = false;
   $("arsenal-panel").hidden = true;
@@ -587,7 +639,9 @@ function updateHud(force = false) {
     state.phase === "damage" ? "TURN OUTCOMES · DAMAGE REVEAL"
     : state.phase === "settling" ? "IMPACT · CONTROLS LOCKED"
     : state.phase === "retreat"
-      ? "SHOT SENT · RETREAT"
+      ? `${botTurn() ? "AI BOT · " : ""}SHOT SENT · RETREAT`
+      : botTurn()
+        ? `AI BOT · TURN ${String(state.turn).padStart(2, "0")}`
       : selectedMode === "practice"
         ? "PRACTICE · NO PRESSURE"
         : `TURN ${String(state.turn).padStart(2, "0")} · ${p.hasCrate ? "ARMED & DANGEROUS" : "CRATE REQUIRED"}`;
@@ -902,6 +956,7 @@ function frame(now: number) {
   refreshAim();
   if (engine && screen === "playing" && !menuOpen && $("guide").hidden) {
     syncInput();
+    localBots.update(engine, dt);
     engine.step(dt);
     state = engine.state;
   } else if (network && screen === "playing") {
@@ -962,17 +1017,19 @@ Object.assign(window, {
       aim,
       viewport,
       sound: { ...audio.diagnostics },
-      controls: { touch: touchEnabled, charging: chargingAt !== null, input: input() },
+      controls: { touch: touchEnabled, enabled: canControl(), charging: chargingAt !== null, input: input() },
       ...state,
     }),
 });
 if (import.meta.env.DEV)
   Object.assign(window, {
     advanceTime: (ms: number) => {
-      if (!engine || screen !== "playing") return;
+      if (!engine || screen !== "playing" || menuOpen || !$("guide").hidden) return;
       syncInput();
-      for (let i = 0; i < Math.ceil(ms / (1000 / 120)); i++)
+      for (let i = 0; i < Math.ceil(ms / (1000 / 120)); i++) {
+        localBots.update(engine, 1 / 120);
         engine.step(1 / 120);
+      }
       state = engine.state;
       detectEvents();
       updateHud(true);

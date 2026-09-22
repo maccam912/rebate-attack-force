@@ -3,10 +3,17 @@ import assert from "node:assert/strict";
 import { Client, type Room } from "@colyseus/sdk";
 import { matchMaker } from "@colyseus/core";
 import { createGameServer } from "../server/index";
+import { AttackRoom } from "../server/AttackRoom";
+import { serverMaxTeams } from "../server/capacity";
+import type { GameEngine } from "../shared/game";
 import type { ServerState } from "../shared/protocol";
 import type { LobbyState } from "../src/network";
 
 const server = createGameServer();
+class LimitedAttackRoom extends AttackRoom {
+  protected override readonly maxTeams = 3;
+}
+server.gameServer.define("attack-limited", LimitedAttackRoom);
 const connections = new Set<Room>();
 let endpoint = "";
 type Observed = {
@@ -249,7 +256,7 @@ test(
 );
 
 test(
-  "four-player capacity and automatic reconnect retain anonymous identity",
+  "more than four teams and automatic reconnect retain anonymous identity",
   { timeout: 10000 },
   async () => {
     const a = await create("One");
@@ -258,22 +265,24 @@ test(
       await new Client(endpoint).joinById(a.room.roomId, {
         name: { invalid: true },
         color: "red; background:url(evil)",
+        bot: true,
       }),
     );
     const d = await join(a.room.roomId, "Four");
-    await waitFor(() => a.lobby?.players.length === 4, "full room lobby");
+    const e = await join(a.room.roomId, "Five");
+    const f = await join(a.room.roomId, "Six");
+    await waitFor(() => a.lobby?.players.length === 6, "six team lobby");
+    assert.equal(a.lobby!.maxTeams, null);
+    assert.equal(new Set(a.lobby!.players.map((team) => team.color)).size, 6);
     const malformedGuest = a.lobby!.players.find(
       (player) => player.id === c.room.sessionId,
     )!;
     assert.equal(malformedGuest.name, "Guest 3");
+    assert.notEqual(malformedGuest.bot, true, "clients cannot grant themselves bot control");
     assert.match(
       malformedGuest.color,
       /^#[0-9a-f]{6}$/i,
       "guest color is assigned by the server",
-    );
-    await assert.rejects(
-      () => new Client(endpoint).joinById(a.room.roomId, { name: "Five" }),
-      /locked|full|max/i,
     );
     const originalSession = b.room.sessionId;
     let reconnected = false;
@@ -284,12 +293,21 @@ test(
     b.room.connection.close();
     await waitFor(() => reconnected, "automatic transient reconnect", 5000);
     assert.equal(b.room.sessionId, originalSession);
-    assert.equal(a.lobby!.players.length, 4);
+    assert.equal(a.lobby!.players.length, 6);
+    a.room.send("start");
+    await waitFor(() => a.state?.teams.length === 6, "six teams start");
+    for (const active of [a, b, c, d, e]) {
+      await waitFor(() => a.state!.activeTeamId === active.room.sessionId, "every team receives a turn");
+      active.room.send("command", { type: "endTurn" });
+    }
+    await waitFor(() => a.state!.activeTeamId === f.room.sessionId, "sixth team receives a turn");
     await Promise.all([
       a.room.leave(),
       b.room.leave(),
       c.room.leave(),
       d.room.leave(),
+      e.room.leave(),
+      f.room.leave(),
     ]);
   },
 );
@@ -437,4 +455,152 @@ test("sequenced prediction frames acknowledge once and reject stale, forged and 
   assert.equal(a.state!.turn, 1);
   await a.room.leave();
   await b.room.leave();
+});
+
+test("only the host manages bots; bots share team settings and survive restart", { timeout: 10000 }, async () => {
+  const host = await create("Captain");
+  const guest = await join(host.room.roomId, "Friend");
+  await waitFor(() => host.lobby?.players.length === 2, "bot management lobby");
+  guest.room.send("addBot");
+  await waitFor(() => guest.notices.length === 1, "guest cannot add bots");
+  assert.match(guest.notices[0], /Only the room host/);
+  host.room.send("addBot", { id: guest.room.sessionId, name: "Forged", frogs: 6 });
+  await waitFor(() => host.lobby?.players.length === 3, "host adds bot");
+  const firstBot = host.lobby!.players.find((team) => team.bot)!;
+  assert.equal(firstBot.name, "Bot 1");
+  assert.equal(firstBot.connected, true);
+  assert.equal(firstBot.frogs, 1);
+  assert.notEqual(firstBot.id, guest.room.sessionId);
+  assert.match(firstBot.color, /^#[0-9a-f]{6}$/i);
+  guest.room.send("removeBot", { teamId: firstBot.id });
+  await waitFor(() => guest.notices.length === 2, "guest cannot remove bots");
+  host.room.send("removeBot", { teamId: guest.room.sessionId });
+  host.room.send("sync");
+  await waitFor(() => host.lobby!.players.length === 3 && guest.notices.length === 2, "humans cannot be removed as bots");
+  host.room.send("removeBot", { teamId: firstBot.id });
+  await waitFor(() => host.lobby?.players.length === 2, "host removes bot");
+  host.room.send("addBot");
+  await waitFor(() => host.lobby?.players.length === 3, "replacement bot");
+  const bot = host.lobby!.players.find((team) => team.bot)!;
+  assert.notEqual(bot.id, firstBot.id, "removed bot identities are not recycled");
+  assert.equal(new Set(host.lobby!.players.map((team) => team.color)).size, 3);
+  host.room.send("teamSettings", { teamId: bot.id, frogs: 2, hp: 350 });
+  await waitFor(() => host.lobby!.players.find((team) => team.id === bot.id)?.hp === 350, "host configures bot");
+  host.room.send("start");
+  await waitFor(() => !!host.state, "match starts with bot");
+  assert.equal(host.state!.teams.find((team) => team.id === bot.id)?.bot, true);
+  assert.equal(host.state!.players.filter((frog) => frog.teamId === bot.id).length, 2);
+  assert.ok(host.state!.players.filter((frog) => frog.teamId === bot.id).every((frog) => frog.hp === 350));
+  host.room.send("addBot");
+  host.room.send("removeBot", { teamId: bot.id });
+  await waitFor(() => host.notices.length === 2, "bot roster freezes after starting");
+  assert.ok(host.notices.every((notice) => /before the match starts/.test(notice)));
+  const epoch = host.state!.net!.epoch;
+  host.room.send("restart");
+  await waitFor(() => host.state!.net!.epoch !== epoch, "bot match restarts");
+  assert.equal(host.state!.teams.find((team) => team.id === bot.id)?.name, bot.name);
+  assert.equal(host.state!.players.filter((frog) => frog.teamId === bot.id).length, 2);
+  await host.room.leave();
+  await waitFor(() => guest.lobby!.hostId === guest.room.sessionId, "host migrates to human, never bot");
+  const roomId = guest.room.roomId;
+  await guest.room.leave();
+  await waitFor(() => !matchMaker.getLocalRoomById(roomId), "bot-only room disposes after explicit human departures");
+});
+
+test("server capacity includes bots, pending joins and disconnected humans", { timeout: 10000 }, async () => {
+  assert.equal(serverMaxTeams(undefined), null);
+  assert.equal(serverMaxTeams(""), null);
+  assert.equal(serverMaxTeams("12"), 12);
+  for (const invalid of ["1", "0", "-4", "2.5", "nonsense", "Infinity"])
+    assert.throws(() => serverMaxTeams(invalid), /MAX_TEAMS/);
+  const host = observe(await new Client(endpoint).create("attack-limited", { name: "Captain", maxTeams: 999, maxClients: 999 }));
+  await waitFor(() => !!host.lobby, "configured lobby");
+  assert.equal(host.lobby!.maxTeams, 3, "client cannot override operator limit");
+  const friend = await join(host.room.roomId, "Friend");
+  host.room.send("addBot");
+  await waitFor(() => host.lobby?.players.length === 3, "human and bot capacity reached");
+  const botId = host.lobby!.players.find((team) => team.bot)!.id;
+  host.room.send("addBot");
+  await waitFor(() => host.notices.length === 1, "bot capacity rejection");
+  assert.match(host.notices[0], /team limit/);
+  await assert.rejects(() => new Client(endpoint).joinById(host.room.roomId, { name: "Full" }), /locked|full|limit|max/i);
+  const token = friend.room.reconnectionToken;
+  friend.room.reconnection.enabled = false;
+  friend.room.connection.close();
+  await waitFor(() => host.lobby!.players.find((team) => team.id === friend.room.sessionId)?.connected === false, "friend retains disconnected seat");
+  host.room.send("addBot");
+  await waitFor(() => host.notices.length === 2, "offline human still consumes capacity");
+  host.room.send("removeBot", { teamId: botId });
+  await waitFor(() => host.lobby!.players.length === 2, "remove bot frees capacity");
+  const pending = await new Client(endpoint).joinById(host.room.roomId, { name: "Third" });
+  const third = observe(pending);
+  await waitFor(() => host.lobby!.players.length === 3, "transport unlocks after bot removal");
+  assert.equal(host.lobby!.players.filter((team) => team.connected).length, 2);
+  host.room.send("addBot");
+  await waitFor(() => host.notices.length === 3, "retained human seats count together");
+  const restored = observe(await new Client(endpoint).reconnect(token));
+  await waitFor(() => host.lobby!.players.every((team) => team.connected), "reconnect succeeds at full capacity");
+  assert.equal(restored.room.sessionId, friend.room.sessionId);
+  await third.room.leave();
+  await waitFor(() => host.lobby!.players.length === 2, "third leaves");
+
+  // Reserve a transport seat without opening its socket yet. Adding a bot must
+  // not steal a human's in-flight reservation, even though no team exists yet.
+  const reservation = await matchMaker.joinById(host.room.roomId, { name: "Reserved" });
+  host.room.send("addBot");
+  await waitFor(() => host.notices.length === 4, "pending human reservation blocks bot");
+  const reserved = observe(await new Client(endpoint).consumeSeatReservation(reservation));
+  await waitFor(() => host.lobby!.players.length === 3, "reserved human finishes joining");
+  await Promise.all([host.room.leave(), restored.room.leave(), reserved.room.leave()]);
+});
+
+test("solo human can play bots; offline matches pause and abandoned bot rooms expire", { timeout: 50000 }, async () => {
+  const host = await create("Solo");
+  await waitFor(() => !!host.lobby, "solo lobby");
+  host.room.send("addBot");
+  await waitFor(() => host.lobby!.players.length === 2, "solo bot opponent");
+  const botId = host.lobby!.players.find((team) => team.bot)!.id;
+  host.room.send("teamSettings", { teamId: host.room.sessionId, frogs: 1, hp: 500 });
+  host.room.send("teamSettings", { teamId: botId, frogs: 1, hp: 500 });
+  host.room.send("start");
+  await waitFor(() => !!host.state, "one human plus one bot starts");
+  host.room.send("command", { type: "endTurn" });
+  await waitFor(() => host.state!.activeTeamId === botId, "bot turn starts");
+  const token = host.room.reconnectionToken;
+  host.room.reconnection.enabled = false;
+  host.room.connection.close();
+  const room = matchMaker.getLocalRoomById(host.room.roomId)!;
+  const internals = room as unknown as { game: GameEngine; emptySince: number | null; hostId: string };
+  await waitFor(() => internals.emptySince !== null, "bot is not counted as an online human");
+  assert.equal(internals.hostId, "", "bot cannot inherit host");
+  const elapsed = internals.game.capture().simulation.elapsed;
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(internals.game.capture().simulation.elapsed, elapsed, "no simulation progress while every human is offline");
+  const restored = observe(await new Client(endpoint).reconnect(token));
+  await waitFor(() => restored.lobby?.hostId === restored.room.sessionId, "human resumes hosting");
+  const initialTurn = internals.game.state.turn;
+  const botShot = () => restored.state?.soundEvents?.find((event) => event.kind === "shot" && event.playerId === botId);
+  // The persistent shot journal proves the server issued a real attack, even
+  // when the short-lived projectile disappears between network snapshots.
+  await waitFor(() => !!botShot(), "bot fires an ordinary weapon after reconnection", 14000);
+  assert.ok(botShot()!.weapon);
+  assert.ok(internals.game.capture().simulation.elapsed > elapsed, "reconnection resumes simulation");
+  await waitFor(() => restored.state!.turn > initialTurn || restored.state!.phase === "finished", "bot completes its turn", 12000);
+  assert.ok(restored.state!.players.find((frog) => frog.teamId === restored.room.sessionId)!.hp < 500,
+    "the bot's attack damages the human opponent through normal combat");
+  const epoch = restored.state!.net!.epoch;
+  restored.room.send("restart");
+  await waitFor(() => restored.state!.net!.epoch !== epoch, "solo bot match restarts");
+  assert.equal(botShot(), undefined, "restart clears the prior match's shot journal");
+  restored.room.send("command", { type: "endTurn" });
+  await waitFor(() => restored.state!.activeTeamId === botId, "bot plays after restart");
+  await waitFor(() => !!botShot(), "restarted bot controller fires a weapon", 14000);
+  restored.room.reconnection.enabled = false;
+  restored.room.connection.close();
+  await waitFor(() => internals.emptySince !== null, "abandoned match is tracked despite bots");
+  internals.emptySince = Date.now() - 31 * 60 * 1000;
+  const cleanup = room.clock.delayed.find((timer) => timer.time === 10000)!;
+  assert.ok(cleanup, "abandoned room timer exists");
+  cleanup.execute();
+  await waitFor(() => !matchMaker.getLocalRoomById(host.room.roomId), "abandoned bot room cleaned up");
 });

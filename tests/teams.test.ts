@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DOUBLE_JUMP_SECONDS, FIXED_STEP, GameEngine, PLAYER_RADIUS, WATER_Y } from "../shared/game";
-import { MAX_FROGS, MAX_HP, validTeamSettings } from "../shared/settings";
+import { DOUBLE_JUMP_SECONDS, FIXED_STEP, GameEngine, PLAYER_RADIUS, WATER_Y, WIDTH } from "../shared/game";
+import { MAX_FROGS, MAX_HP, teamColor, validTeamSettings } from "../shared/settings";
 
 const advance = (game: GameEngine, seconds: number) => {
   for (let i = 0; i < Math.ceil(seconds / FIXED_STEP); i++) game.step(FIXED_STEP);
@@ -39,6 +39,61 @@ test("team settings create distinct supported frogs with independent HP and inve
   for (const value of [null, {}, { frogs: 0, hp: 100 }, { frogs: 7, hp: 100 },
     { frogs: 2.5, hp: 100 }, { frogs: 2, hp: NaN }, { frogs: 2, hp: 501 }, { frogs: 2, hp: "100" }])
     assert.equal(validTeamSettings(value), false);
+});
+
+test("large rosters retain every team, with separate safe spawns and colors beyond four", () => {
+  for (const count of [5, 12, 32]) {
+    const game = new GameEngine({ players: Array.from({ length: count }, (_, i) => ({
+      id: `t${i}`, name: `Team ${i}`, frogs: MAX_FROGS, bot: i > 0,
+    })) });
+    assert.equal(game.state.teams.length, count);
+    assert.equal(game.state.players.length, count * MAX_FROGS);
+    assert.equal(new Set(game.state.teams.map((team) => team.color)).size, count);
+    assert.equal(game.state.teams[0].bot, false);
+    assert.ok(game.state.teams.slice(1).every((team) => team.bot));
+    assert.equal(new Set(game.state.platforms.map((platform) => platform.id)).size, game.state.platforms.length);
+    for (const [index, frog] of game.state.players.entries()) {
+      assert.match(frog.color, /^#[0-9a-f]{6}$/i);
+      assert.ok(frog.x >= PLAYER_RADIUS && frog.x <= game.state.width - PLAYER_RADIUS);
+      assert.ok(game.state.platforms.some((platform) =>
+        frog.x - PLAYER_RADIUS >= platform.x && frog.x + PLAYER_RADIUS <= platform.x + platform.w &&
+        frog.y + PLAYER_RADIUS === platform.y), `supported spawn for ${frog.id}`);
+      assert.ok(game.state.players.slice(index + 1).every((other) =>
+        Math.hypot(frog.x - other.x, frog.y - other.y) >= PLAYER_RADIUS * 2), `separate spawn for ${frog.id}`);
+    }
+    advance(game, 1);
+    assert.ok(game.state.players.every((frog) => frog.alive && frog.grounded && frog.hp === 100));
+    for (let index = 0; index < count; index++) {
+      assert.equal(game.state.activeTeamId, `t${index}`);
+      end(game);
+    }
+    assert.equal(game.state.activePlayerId, "t0:frog-2");
+  }
+  assert.equal(teamColor(17), teamColor(17), "team colors are stable");
+});
+
+test("expanded arenas allow movement, aiming, weapons, and checkpoint replay beyond the original boundary", () => {
+  const game = new GameEngine({ players: Array.from({ length: 30 }, (_, i) => ({
+    id: `t${i}`, name: `Team ${i}`, connected: i === 29,
+  })) });
+  const frog = game.state.players[29];
+  assert.equal(game.state.activePlayerId, frog.id);
+  assert.ok(frog.x > WIDTH);
+  assert.ok(game.state.width > WIDTH);
+  const x = frog.x;
+  game.setInput(frog.id, { left: false, right: true, up: false, down: false, aimX: x + 180, aimY: frog.y });
+  advance(game, .2);
+  assert.ok(frog.x > x + 10, "world movement uses the expanded width");
+  game.setInput(frog.id, { left: false, right: false, up: false, down: false, aimX: x + 180, aimY: frog.y });
+  game.command(frog.id, { type: "selectWeapon", weapon: "anvil" });
+  game.command(frog.id, { type: "fire", power: 1 });
+  assert.ok(game.state.projectiles.length > 0);
+  assert.ok(game.state.projectiles.every((projectile) => projectile.x > WIDTH), "air support targets the expanded arena");
+  const restored = new GameEngine();
+  restored.restore(game.capture());
+  advance(game, .2);
+  advance(restored, .2);
+  assert.deepEqual(restored.capture(), game.capture());
 });
 
 test("turns alternate teams and round robin uneven rosters, skipping dead frogs", () => {

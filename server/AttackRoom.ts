@@ -1,11 +1,11 @@
 import { Room, ServerError, type Client } from "@colyseus/core";
 import { FIXED_STEP, GameEngine } from "../shared/game";
+import { BotController } from "../shared/bots";
 import type { GameCommand, PlayerInput, Team, WeaponId } from "../shared/types";
-import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, validTeamSettings } from "../shared/settings";
+import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, teamColor, validTeamSettings } from "../shared/settings";
 import { MAX_SEQUENCE_GAP, type ServerState } from "../shared/protocol";
 import { WEAPON_IDS } from "../shared/weapons";
 
-const COLORS = ["#baf27c", "#ffac81", "#acb9ff", "#ffde75"];
 const NEUTRAL: PlayerInput = {
   left: false,
   right: false,
@@ -44,7 +44,7 @@ function validatedCommand(message: unknown): GameCommand | null {
 
 /** A transport adapter: movement, combat and turn rules belong to GameEngine. */
 export class AttackRoom extends Room {
-  maxClients = 4;
+  protected readonly maxTeams: number | null = null;
   maxMessagesPerSecond = 120;
   private guests = new Map<string, Guest>();
   private hostId = "";
@@ -55,8 +55,11 @@ export class AttackRoom extends Room {
   private epoch = "";
   private matchNumber = 0;
   private sequences = new Map<string, number>();
+  private bots = new BotController();
+  private botNumber = 0;
 
   async onCreate() {
+    this.maxClients = this.maxTeams ?? Infinity;
     await this.setPrivate(true);
     this.onMessage("sync", (client) => {
       if (!this.consume(client, "control", 5)) return;
@@ -142,6 +145,30 @@ export class AttackRoom extends Room {
       team.hp = message.hp;
       this.broadcast("lobby", this.lobby());
     });
+    this.onMessage("addBot", (client) => {
+      if (!this.canManageBots(client)) return;
+      // Colyseus also counts pending joins and reconnect reservations. A bot may
+      // only use a seat that has not already been promised to a human.
+      if (this.hasReachedMaxClients() || this.atTeamCapacity()) {
+        client.send("notice", "This room has reached the server's team limit.");
+        return;
+      }
+      const number = ++this.botNumber;
+      const id = `bot:${number}`;
+      this.guests.set(id, {
+        id, name: `Bot ${number}`, color: this.nextColor(), connected: true,
+        bot: true, ...DEFAULT_TEAM_SETTINGS,
+      });
+      this.updateClientCapacity();
+      this.broadcast("lobby", this.lobby());
+    });
+    this.onMessage("removeBot", (client, message: unknown) => {
+      if (!this.canManageBots(client) || !record(message) || typeof message.teamId !== "string") return;
+      if (!this.guests.get(message.teamId)?.bot) return;
+      this.guests.delete(message.teamId);
+      this.updateClientCapacity();
+      this.broadcast("lobby", this.lobby());
+    });
     this.onMessage("start", (client) => {
       if (!this.consume(client, "control", 5) || this.game) return;
       this.startGame(client);
@@ -151,10 +178,13 @@ export class AttackRoom extends Room {
       this.startGame(client);
     });
     this.setFixedTimestep(({ dt }) => {
-      if (!this.game) return;
+      // Bots are never connections: preserve recoverable matches while every
+      // human is offline instead of letting the AI finish the match unattended.
+      if (!this.game || !this.hasConnectedHuman()) return;
       // Losing focus or connectivity must never leave a movement key held forever.
       const id = this.game.state.activePlayerId;
-      if (Date.now() - (this.lastInput.get(id) ?? 0) > 1000) {
+      if (!this.guests.get(this.game.state.activeTeamId)?.bot &&
+        Date.now() - (this.lastInput.get(id) ?? 0) > 1000) {
         const player = this.game.state.players.find((candidate) => candidate.id === id)!;
         this.game.setInput(id, {
           ...NEUTRAL,
@@ -162,6 +192,7 @@ export class AttackRoom extends Room {
           aimY: player.lookAt.y,
         });
       }
+      this.bots.update(this.game, dt);
       this.game.step(dt);
     }, 60);
     // Disable schema patches after installing the simulation: setting this before
@@ -180,6 +211,8 @@ export class AttackRoom extends Room {
   onJoin(client: Client, options: unknown) {
     if (this.game)
       throw new ServerError(4004, "This match has already started.");
+    if (this.atTeamCapacity())
+      throw new ServerError(4005, "This room has reached the server's team limit.");
     const rawName =
       record(options) && typeof options.name === "string" ? options.name : "";
     const name =
@@ -187,10 +220,8 @@ export class AttackRoom extends Room {
         .replace(/[\u0000-\u001f\u007f]/g, "")
         .trim()
         .slice(0, 20) || `Guest ${this.guests.size + 1}`;
-    const used = new Set([...this.guests.values()].map((guest) => guest.color));
-    const color = COLORS.find((candidate) => !used.has(candidate)) ?? COLORS[0];
     this.guests.set(client.sessionId, {
-      id: client.sessionId, name, color, connected: true, ...DEFAULT_TEAM_SETTINGS,
+      id: client.sessionId, name, color: this.nextColor(), connected: true, ...DEFAULT_TEAM_SETTINGS,
     });
     this.emptySince = null;
     if (!this.hostId) this.hostId = client.sessionId;
@@ -198,9 +229,10 @@ export class AttackRoom extends Room {
   }
 
   onDrop(client: Client) {
-    this.allowReconnection(client, "manual");
     const guest = this.guests.get(client.sessionId);
-    if (guest) guest.connected = false;
+    if (!guest) return;
+    this.allowReconnection(client, "manual");
+    guest.connected = false;
     this.game?.setTeamConnected(client.sessionId, false);
     this.updateHost();
     this.broadcast("lobby", this.lobby());
@@ -249,7 +281,7 @@ export class AttackRoom extends Room {
       return;
     }
     if ([...this.guests.values()].filter((guest) => guest.connected).length < 2) {
-      client.send("notice", "Invite at least one friend before starting.");
+      client.send("notice", "Invite at least one friend or add a bot before starting.");
       return;
     }
     this.lock();
@@ -258,6 +290,7 @@ export class AttackRoom extends Room {
       mode: "versus",
       seed: Date.now(),
     });
+    this.bots = new BotController();
     this.lastInput.clear();
     this.sequences.clear();
     this.epoch = `${Date.now().toString(36)}-${++this.matchNumber}`;
@@ -282,8 +315,8 @@ export class AttackRoom extends Room {
   }
 
   private updateHost() {
-    const connected = [...this.guests.values()].filter((guest) => guest.connected);
-    if (!this.guests.get(this.hostId)?.connected) this.hostId = connected[0]?.id ?? "";
+    const connected = [...this.guests.values()].filter((guest) => guest.connected && !guest.bot);
+    if (!connected.some((guest) => guest.id === this.hostId)) this.hostId = connected[0]?.id ?? "";
     if (connected.length === 0) this.emptySince ??= Date.now();
     else this.emptySince = null;
   }
@@ -294,7 +327,41 @@ export class AttackRoom extends Room {
       hostId: this.hostId,
       players: [...this.guests.values()],
       started: this.game !== null,
+      maxTeams: this.maxTeams,
     };
+  }
+
+  private hasConnectedHuman() {
+    return [...this.guests.values()].some((guest) => guest.connected && !guest.bot);
+  }
+
+  private atTeamCapacity() {
+    return this.maxTeams !== null && this.guests.size >= this.maxTeams;
+  }
+
+  private updateClientCapacity() {
+    const botCount = [...this.guests.values()].filter((guest) => guest.bot).length;
+    this.maxClients = this.maxTeams === null ? Infinity : this.maxTeams - botCount;
+  }
+
+  private canManageBots(client: Client) {
+    if (!this.consume(client, "bots", 10)) return false;
+    if (client.sessionId !== this.hostId) {
+      client.send("notice", "Only the room host can add or remove bots.");
+      return false;
+    }
+    if (this.game) {
+      client.send("notice", "Bots can only be added or removed before the match starts.");
+      return false;
+    }
+    return true;
+  }
+
+  private nextColor() {
+    const used = new Set([...this.guests.values()].map((guest) => guest.color));
+    let index = 0;
+    while (index < this.guests.size + 4 && used.has(teamColor(index))) index++;
+    return teamColor(index);
   }
 
   private consume(client: Client, lane: string, rate: number) {

@@ -5,10 +5,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { AttackRoom } from "./AttackRoom";
+import { serverMaxTeams } from "./capacity";
 
 const dist = fileURLToPath(new URL("../dist/", import.meta.url));
 
 export function createGameServer() {
+  const maxTeams = serverMaxTeams(process.env.MAX_TEAMS);
+  class ConfiguredAttackRoom extends AttackRoom {
+    protected override readonly maxTeams = maxTeams;
+  }
   let ready = true;
   const gameServer = new Server({
     greet: false,
@@ -41,7 +46,7 @@ export function createGameServer() {
       });
     },
   });
-  gameServer.define("attack", AttackRoom);
+  gameServer.define("attack", ConfiguredAttackRoom);
   let shutdown: Promise<void> | null = null;
   return {
     gameServer,

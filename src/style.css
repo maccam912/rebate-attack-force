@@ -10,10 +10,10 @@
 }
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-button, input { font: inherit; color: inherit; border-radius: 7px; }
+button, input, select { font: inherit; color: inherit; border-radius: 7px; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .4; }
-button:focus-visible, input:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
 [hidden] { display: none !important; }
 .arena { position: relative; width: 100%; height: 100%; height: 100dvh; overflow: hidden; background: #a4b895; }
 .arena canvas { display: block; width: 100%; height: 100%; outline: none; cursor: default; touch-action: none; }
@@ -99,6 +99,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--lime); outl
 .team-settings label { flex: 1; min-width: 0; font-size: 11px; color: var(--dim); }
 .team-settings input { display: block; width: 100%; padding: 8px; margin-top: 7px; background: #ffffff09; border: 1px solid var(--line); }
 .team-settings input:disabled { opacity: .7; }
+.controller-label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; color: var(--dim); font-size: 10px; }
+.controller-label select { min-width: 88px; padding: 5px; background: #173329; border: 1px solid var(--line); }
+.team-actions { display: flex; gap: 8px; margin-bottom: 16px; }
+.team-actions .secondary-button { justify-content: center; margin-top: 0; }
+.remove-team { flex-shrink: 0; padding: 7px; border: 1px solid var(--line); background: #ffffff09; font-size: 10px; }
 .team-heading { margin: 12px 0 4px; font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
 .team-heading small { display: block; color: var(--dim); font-size: 10px; font-weight: 400; margin-top: 4px; }
 .weapon-card { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; }
@@ -306,7 +311,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--lime); outl
 #app[data-touch="true"] .menu-panel button,
 #app[data-touch="true"] .dialog button { min-height: 44px; }
 #app[data-touch="true"] .dialog-close { min-width: 44px; top: 4px; right: 4px; }
-#app[data-touch="true"] input { font-size: 16px; min-height: 44px; }
+#app[data-touch="true"] input, #app[data-touch="true"] select { font-size: 16px; min-height: 44px; }
 #app[data-touch="true"] .dialog-backdrop {
   padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
 }
