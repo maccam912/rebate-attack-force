@@ -93,6 +93,8 @@ try {
   s = await snapshot(local);
   assert.ok(s.players[0].x > x + 80, "Walk should move frog");
   assert.ok(s.players[0].hasCrate, "Walking into crate should arm frog");
+  await local.keyboard.press("b");
+  await local.click('[data-weapon="grenade"]');
   await local.keyboard.press("2");
   assert.equal((await snapshot(local)).tool, "weapon");
   const rect = await local.locator("#game").boundingBox();

@@ -34,8 +34,8 @@ test("all 24 weapons are stocked in normal matches and refilled each practice tu
   const { game, a } = arena();
   fire(game, "golf");
   assert.equal(a.inventory.golf, 8);
-  game.command(a.id, { type: "endTurn" });
-  advance(game, 0.1);
+  assert.equal(game.command(a.id, { type: "endTurn" }), false, "melee already ended control");
+  advance(game, 0.6);
   assert.equal(game.state.turn, 2);
   assert.deepEqual(a.inventory, createInventory("practice"));
 });
@@ -46,7 +46,7 @@ test("every arsenal command spends exactly one round and rejects another shot", 
     const count = a.inventory[weapon];
     fire(game, weapon);
     assert.equal(a.inventory[weapon], count - 1, weapon);
-    assert.equal(game.state.phase, "retreat", weapon);
+    assert.equal(game.state.phase, ["melee", "blast"].includes(WEAPON_CATALOG[weapon].attack) ? "settling" : "retreat", weapon);
     assert.equal(game.command(a.id, { type: "fire" }), false, weapon);
     assert.equal(game.command(a.id, { type: "selectWeapon", weapon: "rocket" }), false, weapon);
     advance(game, 0.2);
@@ -107,7 +107,7 @@ test("mines stay safe on their placement turn and while an inactive frog is near
   assert.equal(mine.fuse, null, "a waiting opponent does not trigger a mine");
   assert.equal(game.state.mines.length, 1);
   game.command(a.id, { type: "endTurn" });
-  advance(game, 0.1);
+  advance(game, 0.4);
   assert.equal(game.state.activePlayerId, b.id, "an idle mine does not block the next turn");
   assert.notEqual(mine.fuse, null, "the nearby opponent starts its own turn and trips the mine");
   game.command(b.id, { type: "endTurn" });
@@ -115,7 +115,8 @@ test("mines stay safe on their placement turn and while an inactive frog is near
   assert.equal(game.state.phase, "settling", "a lit fuse finishes before the next handoff");
   advance(game, 0.4);
   assert.equal(game.state.mines.length, 0);
-  assert.ok(b.hp < 1000);
+  assert.equal(b.hp, 1000);
+  assert.ok(game.state.resolution!.pendingDamage[b.id] > 0);
   assert.ok(b.tumble > 0);
 });
 
@@ -149,7 +150,8 @@ test("melee requires reach, facing and an unobstructed line to the target", () =
     if (scenario === "wall") game.state.platforms.push({ id: "wall", x: a.x + 35, y: 850, w: 12, h: 150 });
     fire(game, "bat", a.x + 500, a.y);
     if (scenario === "hit") {
-      assert.ok(b.hp < 1000);
+      assert.equal(b.hp, 1000);
+      assert.ok(game.state.resolution!.pendingDamage[b.id] > 0);
       assert.ok(b.vx > 1200);
       assert.ok(b.angularVelocity > 0);
     } else {
@@ -181,7 +183,7 @@ test("air support starts above the arena, targets the cursor and is blocked by r
     assert.ok(game.state.projectiles.every((p) => p.y < 0 && p.variant === "strike"));
     advance(game, 1.8);
     if (roof) assert.equal(b.hp, 1000);
-    else assert.ok(b.hp < 1000, "the exposed target is hit");
+    else assert.ok((game.state.resolution?.pendingDamage[b.id] ?? 0) > 0 || b.hp < 1000, "the exposed target is hit");
   }
 });
 
@@ -272,6 +274,7 @@ test("a point-blank sonic burp launches targets along the aim even behind its bl
   b.x = a.x + 60;
   fire(game, "pulse", a.x + 400, a.y);
   assert.ok(b.vx > 800);
-  assert.ok(b.hp < 1000);
+  assert.equal(b.hp, 1000);
+  assert.ok(game.state.resolution!.pendingDamage[b.id] > 0);
   assert.equal(a.hp, 1000);
 });

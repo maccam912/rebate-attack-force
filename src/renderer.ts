@@ -1,5 +1,6 @@
 import type { GameState, Player } from "../shared/types";
 import { WEAPON_CATALOG } from "../shared/weapons";
+import { DAMAGE_APPLY_SECONDS } from "../shared/game";
 
 import type { Camera } from "./camera";
 import { FrogAnimator } from "./frog";
@@ -12,6 +13,7 @@ export interface RenderOptions {
   tool: "grapple" | "weapon";
   power: number;
   menu: boolean;
+  reducedMotion?: boolean;
 }
 const ink = "#223c34";
 const animator = new FrogAnimator();
@@ -80,6 +82,50 @@ function text(
   c.fillStyle = color;
   c.font = `${weight} ${size}px 'Trebuchet MS', sans-serif`;
   c.fillText(t, x, y);
+}
+
+function displayedHealth(s: GameState, player: Player): number {
+  const reveal = s.phase === "damage" ? s.resolution?.reveal : null;
+  if (!reveal || reveal.playerId !== player.id) return player.hp;
+  if (!reveal.applied) return reveal.fromHp;
+  const progress = Math.max(0, Math.min(1, (reveal.elapsed - DAMAGE_APPLY_SECONDS) / 0.45));
+  return reveal.fromHp + (reveal.toHp - reveal.fromHp) * (1 - (1 - progress) ** 3);
+}
+
+/** Screen-size text stays readable even when a chain reaction has widened the camera. */
+function drawDamageOutcome(c: CanvasRenderingContext2D, s: GameState, o: RenderOptions) {
+  const reveal = s.phase === "damage" ? s.resolution?.reveal : null;
+  const frog = reveal && s.players.find((player) => player.id === reveal.playerId);
+  if (!reveal || !frog || o.menu) return;
+  const { camera, viewport } = o;
+  const x = (frog.x - camera.x) * camera.zoom;
+  const y = ((reveal.drowned ? s.waterY - 28 : frog.y) - camera.y) * camera.zoom;
+  // Wait for the camera to reach distant victims before displaying their outcome.
+  if (x < -40 || x > viewport.width + 40 || y < -40 || y > viewport.height + 40) return;
+  const cardWidth = Math.min(214, viewport.width - 28);
+  const cardX = Math.max(14, Math.min(viewport.width - cardWidth - 14, x - cardWidth / 2));
+  const cardY = Math.max(Math.min(88, viewport.height * 0.25), Math.min(viewport.height - 112, y - 150));
+  const hp = Math.round(displayedHealth(s, frog));
+  c.save();
+  c.setTransform(viewport.dpr, 0, 0, viewport.dpr, 0, 0);
+  c.globalAlpha = Math.min(1, reveal.elapsed / 0.16);
+  rounded(c, cardX, cardY, cardWidth, 98, 13, "#173329ee", "#eaf0c241");
+  c.textAlign = "center";
+  const center = cardX + cardWidth / 2;
+  text(c, frog.name, center, cardY + 22, 13, frog.color, 800);
+  if (reveal.applied) {
+    const pop = o.reducedMotion ? 0 : Math.max(0, 1 - (reveal.elapsed - DAMAGE_APPLY_SECONDS) / 0.2) * 3;
+    text(c, `−${Math.round(reveal.damage)}`, center, cardY + 53, 28 + pop, "#ffd69a", 900);
+    const result = `${hp} HP${hp === 0 ? reveal.drowned ? " · SPLASH" : " · K.O." : ""}`;
+    text(c, `${reveal.fromHp} → ${result}`, center, cardY + 74, 12, "#f5f1d3", 700);
+  } else {
+    text(c, "TURN OUTCOME", center, cardY + 48, 13, "#f5f1d3", 800);
+    text(c, `${reveal.fromHp} HP`, center, cardY + 72, 12, "#eaf0c2", 700);
+  }
+  rounded(c, cardX + 16, cardY + 83, cardWidth - 32, 5, 2.5, "#eaf0c230");
+  const barWidth = (cardWidth - 32) * Math.max(0, hp) / frog.maxHp;
+  if (barWidth > 0) rounded(c, cardX + 16, cardY + 83, barWidth, 5, 2.5, frog.color);
+  c.restore();
 }
 
 export function drawFrog(
@@ -404,8 +450,9 @@ export function renderGame(
   c.restore();
   c.scale(camera.zoom, camera.zoom);
   c.translate(-camera.x, -camera.y);
-  if (s.explosions.some((e) => e.age < 0.2)) {
-    const strength = Math.min(7, Math.max(...s.explosions.filter((e) => e.age < 0.2).map((e) => e.radius / 42)));
+  if (!o.reducedMotion && !o.menu && (s.resolution?.impact ?? 0) > 0.01) {
+    // A few screen pixels of kick sell the contact without obscuring its outcome.
+    const strength = Math.min(1, s.resolution!.impact) * 2.4 / camera.zoom;
     c.translate(
       Math.sin(o.time * 77) * strength,
       Math.cos(o.time * 93) * strength,
@@ -451,8 +498,10 @@ export function renderGame(
     c.restore();
   }
   const labels: { x: number; y: number; width: number }[] = [];
+  const drowned = new Set(s.resolution?.drownedPlayerIds ?? []);
+  const controlling = s.phase === "playing" || s.phase === "retreat";
   for (const p of s.players) {
-    if (!p.alive) continue;
+    if (!p.alive || drowned.has(p.id)) continue;
     if (p.rope) {
       const points = [p.rope, ...p.rope.bends, p].flatMap((point) => [point.x, point.y]);
       line(c, points, "#294a3c", 4);
@@ -469,8 +518,8 @@ export function renderGame(
     }
     drawFrog(
       c, p, o.time, 1,
-      p.id === s.activePlayerId ? aim : undefined,
-      o.menu ? [] : s.players,
+      controlling && p.id === s.activePlayerId ? aim : undefined,
+      o.menu ? [] : s.players.filter((frog) => !drowned.has(frog.id)),
     );
     c.textAlign = "center";
     c.font = "800 13px 'Trebuchet MS', sans-serif";
@@ -487,18 +536,18 @@ export function renderGame(
       c,
       p.x - 25,
       labelY + 8,
-      (Math.max(0, p.hp) / p.maxHp) * 50,
+      (Math.max(0, displayedHealth(s, p)) / p.maxHp) * 50,
       4,
       2,
       p.color,
     );
-    if (p.id === s.activePlayerId && !o.menu) {
+    if (p.id === s.activePlayerId && !o.menu && controlling) {
       const ay = labelY - 16 + Math.sin(o.time * 4) * 3;
       poly(c, [p.x - 5, ay, p.x + 5, ay, p.x, ay + 6], "#fbf7d9");
     }
     c.textAlign = "left";
   }
-  if (active && aim && !o.menu && s.phase !== "finished") {
+  if (active && aim && !o.menu && controlling) {
     const dx = aim.x - active.x,
       dy = aim.y - active.y,
       len = Math.hypot(dx, dy) || 1;
@@ -684,6 +733,15 @@ export function renderGame(
     c.globalAlpha = 1;
   }
   water(c, s, o.time);
+  for (const id of drowned) {
+    const frog = s.players.find((player) => player.id === id);
+    if (!frog?.alive) continue;
+    c.beginPath();
+    c.ellipse(frog.x, s.waterY + 3, 24 + Math.sin(o.time * 3) * 4, 5, 0, 0, Math.PI * 2);
+    c.strokeStyle = "#f5f1d3aa";
+    c.lineWidth = 1.5;
+    c.stroke();
+  }
   // Floating seed motes.
   for (let i = 0; i < 17; i++) {
     const x = (i * 113 + Math.sin(o.time * 0.2 + i) * 15) % s.width,
@@ -692,7 +750,7 @@ export function renderGame(
   }
   if (!o.menu) {
     for (const p of s.players) {
-      if (!p.alive || p.id === s.activePlayerId) continue;
+      if (!p.alive || drowned.has(p.id) || p.id === s.activePlayerId) continue;
       const inset = 65 / camera.zoom;
       const x = Math.max(camera.x + inset, Math.min(camera.x + camera.width - inset, p.x));
       const y = Math.max(camera.y + inset, Math.min(camera.y + camera.height - 100 / camera.zoom, p.y));
@@ -711,4 +769,5 @@ export function renderGame(
     }
   }
   c.restore();
+  drawDamageOutcome(c, s, o);
 }

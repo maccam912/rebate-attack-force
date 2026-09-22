@@ -167,15 +167,17 @@ test("fast falling characters cannot tunnel through thin shelves", () => {
   advance(game, 0.15);
   assert.ok(player.y < 1400 - PLAYER_RADIUS, "the thin shelf rebounds the fall without tunneling");
   assert.ok(player.vy < 0, "a hard landing bounces upward");
-  assert.ok(player.hp < 100, "fall damage follows the impact speed");
+  assert.equal(player.hp, 100, "active traversal is immune to terrain impact damage");
   assert.equal(player.grounded, false);
 });
 
-test("water eliminates a player and resolves the winner", () => {
+test("water eliminates a player and resolves the winner after showing its outcome", () => {
   const game = new GameEngine();
   game.state.players[0]!.x = 25;
   game.state.players[0]!.y = WATER_Y - PLAYER_RADIUS;
   game.step(FIXED_STEP);
+  assert.equal(game.state.players[0]!.alive, true, "drowning waits for its outcome");
+  advance(game, 3);
   assert.equal(game.state.players[0]!.alive, false);
   assert.equal(game.state.players[0]!.hp, 0);
   assert.equal(game.state.phase, "finished");
@@ -203,7 +205,7 @@ test("practice respawns drowned players and always returns control to its first 
   const game = new GameEngine({ mode: "practice" });
   game.state.players[0]!.x = 25;
   game.state.players[0]!.y = WATER_Y - PLAYER_RADIUS;
-  advance(game, 0.1);
+  advance(game, 3);
   assert.equal(game.state.phase, "playing");
   assert.equal(game.state.players[0]!.alive, true);
   assert.equal(game.state.players[0]!.hp, 100);
@@ -268,7 +270,8 @@ test("point blank rockets hit nearby enemies instead of skipping past their body
   game.setInput("p1", input({ aimX: target.x, aimY: target.y }));
   assert.equal(game.command("p1", { type: "fire" }), true);
   advance(game, 0.02);
-  assert.ok(target.hp < 100);
+  assert.equal(target.hp, 100);
+  assert.ok(game.state.resolution!.pendingDamage[target.id] > 0);
   assert.equal(game.state.projectiles.length, 0);
 });
 
@@ -293,7 +296,8 @@ test("grenades arc, bounce off terrain, and explode when their fuse expires", ()
   advance(game, 2.05);
   assert.equal(game.state.projectiles.length, 0);
   assert.ok(game.state.explosions.length > 0, "the fuse produced an explosion");
-  assert.ok(player.hp < 100, "the blast can damage its owner");
+  assert.equal(player.hp, 100, "blast damage waits for the outcome");
+  assert.ok(game.state.resolution!.pendingDamage[player.id] > 0, "the blast can damage its owner");
 });
 
 test("pulse is a short-range directional blast that spares its owner", () => {
@@ -307,7 +311,8 @@ test("pulse is a short-range directional blast that spares its owner", () => {
   game.setInput("p1", input({ aimX: target.x, aimY: target.y }));
   assert.equal(game.command("p1", { type: "fire" }), true);
   assert.equal(game.state.projectiles.length, 0);
-  assert.ok(target.hp < 100);
+  assert.equal(target.hp, 100);
+  assert.ok(game.state.resolution!.pendingDamage[target.id] > 0);
   assert.ok(target.vx > 0);
   assert.equal(player.hp, 100);
 });
@@ -404,11 +409,13 @@ test("a killing blast keeps simulating its airborne survivor and can produce a d
   game.setInput("p1", input({ aimX: target.x, aimY: target.y }));
   assert.equal(game.command("p1", { type: "fire" }), true);
   game.step(FIXED_STEP);
-  assert.equal(target.alive, false);
+  assert.equal(target.alive, true, "the lethal hit leaves the body in flight");
+  assert.equal(target.hp, 1);
   assert.equal(shooter.alive, true);
   assert.equal(game.state.phase, "settling");
   assert.equal(game.state.winnerId, null);
-  advance(game, 1);
+  advance(game, 7);
+  assert.equal(target.alive, false);
   assert.equal(shooter.alive, false);
   assert.equal(game.state.phase, "finished");
   assert.equal(game.state.winnerId, null);

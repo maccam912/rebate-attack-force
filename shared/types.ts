@@ -4,7 +4,7 @@ export type WeaponId =
   | "airstrike" | "meteor" | "shotgun" | "sniper" | "mortar" | "firework"
   | "anvil" | "vacuum" | "gust" | "disco" | "boomerang";
 export type GameMode = "practice" | "versus";
-export type GamePhase = "playing" | "retreat" | "settling" | "waiting" | "finished";
+export type GamePhase = "playing" | "retreat" | "settling" | "damage" | "waiting" | "finished";
 
 export type GameSoundKind =
   | "jump" | "backflip" | "grapple" | "release" | "land" | "bounce"
@@ -138,6 +138,28 @@ export interface Explosion {
   direction?: number;
 }
 
+/** Authoritative presentation clocks also survive network prediction and replay. */
+export interface DamageReveal {
+  playerId: string;
+  damage: number;
+  fromHp: number;
+  toHp: number;
+  elapsed: number;
+  applied: boolean;
+  drowned: boolean;
+}
+
+export interface TurnResolution {
+  affectedPlayerIds: string[];
+  pendingDamage: Record<string, number>;
+  drownedPlayerIds: string[];
+  focus: Point | null;
+  reveal: DamageReveal | null;
+  slowMotionRemaining: number;
+  impact: number;
+  weapon?: WeaponId;
+}
+
 export interface GameState {
   width: number;
   height: number;
@@ -152,6 +174,8 @@ export interface GameState {
   /** Optional when reading older saved states or servers. */
   soundEvents?: GameSoundEvent[];
   soundSequence?: number;
+  /** Absent in older snapshots; HP remains unchanged until each damage reveal. */
+  resolution?: TurnResolution | null;
   activePlayerId: string;
   activeTeamId: string;
   phase: GamePhase;

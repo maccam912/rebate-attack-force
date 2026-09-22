@@ -20,7 +20,7 @@ function advance(game: GameEngine, seconds: number) {
   for (let i = 0; i < Math.round(seconds / FIXED_STEP); i++) game.step(FIXED_STEP);
 }
 
-test("ordinary jumps and backflips land safely while long falls hurt and rebound", () => {
+test("active jumps, backflips and long falls land safely while hard falls rebound", () => {
   for (const flip of [false, true]) {
     const { game, frog } = arena();
     frog.x = 1400;
@@ -43,19 +43,21 @@ test("ordinary jumps and backflips land safely while long falls hurt and rebound
     if (before > 0 && frog.vy < 0) { bounced = true; break; }
   }
   assert.ok(bounced);
-  assert.ok(frog.hp < 100 && frog.hp > 0);
+  assert.equal(frog.hp, 100, "active terrain traversal does not queue damage");
+  assert.equal(game.state.resolution?.pendingDamage[frog.id] ?? 0, 0);
   assert.ok(frog.impact > 0.8);
 });
 
-test("a launch rebounds from thin walls and the world boundary with impact damage", () => {
+test("an inactive launched frog rebounds from thin walls and world boundaries with pending impact damage", () => {
   for (const boundary of [false, true]) {
-    const { game, frog } = arena();
+    const { game, other: frog } = arena();
     if (!boundary) game.state.platforms.push({ id: "wall", x: 500, y: 500, w: 8, h: 1000 });
     Object.assign(frog, { x: boundary ? WIDTH - 90 : 430, y: 1000, grounded: false });
     applyImpulse(frog, 1450, -80, 8);
     advance(game, 0.08);
     assert.ok(frog.vx < -800, "the body retains a lively rebound");
-    assert.ok(frog.hp < 100);
+    assert.equal(frog.hp, 100);
+    assert.ok(game.state.resolution!.pendingDamage[frog.id] > 0);
     assert.ok(frog.x < (boundary ? WIDTH : 500) - PLAYER_RADIUS);
     assert.ok(Math.abs(frog.angularVelocity) > 1);
   }
@@ -86,7 +88,9 @@ test("opposing maximum-speed diagonal launches cannot cross through each other",
   game.step(FIXED_STEP);
   assert.ok(frog.x < other.x && frog.y < other.y, "the collision keeps the original body order");
   assert.ok(Math.hypot(other.x - frog.x, other.y - frog.y) >= PLAYER_RADIUS * 2 - 0.1);
-  assert.ok(frog.hp < 100 && other.hp < 100);
+  assert.equal(frog.hp, 100);
+  assert.equal(other.hp, 100);
+  assert.ok(game.state.resolution!.pendingDamage[other.id] > 0, "the lower frog takes the diagonal stomp damage");
 });
 
 test("flight attitude follows the rising and descending arc without removing launched spin", () => {

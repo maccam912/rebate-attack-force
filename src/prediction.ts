@@ -7,7 +7,7 @@ import {
   type InputFrame,
   type ServerState,
 } from "../shared/protocol";
-import type { GameCommand, GameState, Player, PlayerInput, Point } from "../shared/types";
+import type { GameCommand, GameState, Player, PlayerInput, Point, TurnResolution } from "../shared/types";
 
 const neutral = (point: Point = { x: 0, y: 0 }): PlayerInput => ({
   left: false, right: false, up: false, down: false, aimX: point.x, aimY: point.y,
@@ -17,6 +17,25 @@ const angleDifference = (a: number, b: number) => Math.atan2(Math.sin(b - a), Ma
 const lerpAngle = (a: number, b: number, t: number) => a + angleDifference(a, b) * t;
 type TimedState = { at: number; receivedAt: number; state: GameState };
 type Correction = { x: number; y: number; rotation: number };
+
+function interpolateResolution(a: TurnResolution | null | undefined,
+  b: TurnResolution | null | undefined, t: number): TurnResolution | null | undefined {
+  if (!a || !b) return a;
+  const sameReveal = a.reveal && b.reveal && a.reveal.playerId === b.reveal.playerId &&
+    a.reveal.applied === b.reveal.applied;
+  return {
+    ...a,
+    // A new hit is discrete; do not show its shake or slow motion before its blast.
+    slowMotionRemaining: b.slowMotionRemaining <= a.slowMotionRemaining
+      ? lerp(a.slowMotionRemaining, b.slowMotionRemaining, t) : a.slowMotionRemaining,
+    impact: b.impact <= a.impact ? lerp(a.impact, b.impact, t) : a.impact,
+    focus: a.focus && b.focus && (!a.reveal || sameReveal) ? {
+      x: lerp(a.focus.x, b.focus.x, t), y: lerp(a.focus.y, b.focus.y, t),
+    } : a.focus,
+    // Keep the HP debit, deaths and the next recipient on their snapshot boundary.
+    reveal: sameReveal ? { ...a.reveal!, elapsed: lerp(a.reveal!.elapsed, b.reveal!.elapsed, t) } : a.reveal,
+  };
+}
 
 function interpolatePlayer(a: Player, b: Player, t: number): Player {
   if (a.alive !== b.alive || Math.hypot(a.x - b.x, a.y - b.y) > 500) return a;
@@ -56,6 +75,7 @@ export function interpolateStates(a: GameState, b: GameState, amount: number): G
   return {
     ...a,
     timeLeft: lerp(a.timeLeft, b.timeLeft, t),
+    resolution: interpolateResolution(a.resolution, b.resolution, t),
     players: a.players.map((player) => {
       const next = players.get(player.id);
       return next ? interpolatePlayer(player, next, t) : player;
@@ -112,7 +132,8 @@ export class ClientPrediction {
     return !!this.latest && this.latest.activeTeamId === this.sessionId &&
       (this.latest.phase === "playing" || this.latest.phase === "retreat") &&
       (!this.engine || (this.engine.state.turn === this.latest.turn &&
-        this.engine.state.activePlayerId === this.latest.activePlayerId));
+        this.engine.state.activePlayerId === this.latest.activePlayerId &&
+        (this.engine.state.phase === "playing" || this.engine.state.phase === "retreat")));
   }
 
   get pendingCount(): number { return this.pending.length; }

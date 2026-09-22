@@ -56,6 +56,22 @@ test("the active frog moves and jumps before server acknowledgement", () => {
   assert.equal("dt" in sent[0], false, "the client never asks the server to advance time");
 });
 
+test("a predicted end of control locks commands before the server acknowledges it", () => {
+  const server = new GameEngine({ mode: "practice" });
+  server.state.players[0].vy = -300;
+  server.state.players[0].grounded = false;
+  const sent: InputFrame[] = [];
+  const client = new ClientPrediction((frame) => sent.push(frame));
+  client.receive(snapshot(server), "p1", 0);
+  client.command({ type: "endTurn" });
+  assert.equal(client.advance(NETWORK_STEP, 17)!.phase, "settling");
+  assert.equal(server.state.phase, "playing", "authority has not acknowledged the command yet");
+  assert.equal(client.canControl, false);
+  client.command({ type: "jump" });
+  client.advance(NETWORK_STEP, 34);
+  assert.deepEqual(sent[1].commands, [], "controls cannot leak into the outcome sequence");
+});
+
 test("acknowledged actions are removed and unacknowledged actions replay exactly once", () => {
   const server = new GameEngine({ mode: "practice", seed: 31 });
   const sent: InputFrame[] = [];
@@ -130,6 +146,54 @@ test("spectators interpolate trajectories, angular attitude, rope length, mines 
   assert.equal(a.players[0].rope!.length, 150, "presentation never edits a buffered state");
 });
 
+test("spectators smooth the damage reveal but debit HP and change recipients together", () => {
+  const a = structuredClone(new GameEngine().state);
+  a.phase = "damage";
+  a.resolution = {
+    affectedPlayerIds: ["p1", "p2"], pendingDamage: { p1: 25, p2: 40 },
+    drownedPlayerIds: [], focus: { x: 100, y: 200 },
+    slowMotionRemaining: 0.2, impact: 0.8,
+    reveal: { playerId: "p1", damage: 25, fromHp: 100, toHp: 75,
+      elapsed: 0.2, applied: false, drowned: false },
+  };
+  const b = structuredClone(a);
+  b.resolution!.focus = { x: 120, y: 220 };
+  b.resolution!.reveal!.elapsed = 0.4;
+  b.resolution!.slowMotionRemaining = 0.1;
+  b.resolution!.impact = 0.4;
+  const halfway = interpolateStates(a, b, 0.5);
+  assert.ok(Math.abs(halfway.resolution!.reveal!.elapsed - 0.3) < 1e-9);
+  assert.deepEqual(halfway.resolution!.focus, { x: 110, y: 210 });
+  assert.ok(Math.abs(halfway.resolution!.impact - 0.6) < 1e-9);
+  assert.equal(halfway.players[0].hp, 100);
+  assert.equal(a.resolution.reveal!.elapsed, 0.2, "buffered reveal clocks are immutable");
+
+  b.resolution!.reveal!.applied = true;
+  b.players[0].hp = 75;
+  assert.equal(interpolateStates(a, b, 0.99).resolution!.reveal!.applied, false);
+  assert.equal(interpolateStates(a, b, 0.99).players[0].hp, 100);
+  assert.equal(interpolateStates(a, b, 1).resolution!.reveal!.applied, true);
+  assert.equal(interpolateStates(a, b, 1).players[0].hp, 75);
+
+  b.resolution!.reveal = { playerId: "p2", damage: 40, fromHp: 100, toHp: 60,
+    elapsed: 0.05, applied: false, drowned: false };
+  assert.equal(interpolateStates(a, b, 0.99).resolution!.reveal!.playerId, "p1");
+  assert.deepEqual(interpolateStates(a, b, 0.99).resolution!.focus, a.resolution.focus);
+  assert.equal(interpolateStates(a, b, 1).resolution!.reveal!.playerId, "p2");
+});
+
+test("spectators do not anticipate a new explosion's camera impact", () => {
+  const a = structuredClone(new GameEngine().state);
+  a.resolution = { affectedPlayerIds: [], pendingDamage: {}, drownedPlayerIds: [],
+    focus: null, reveal: null, slowMotionRemaining: 0, impact: 0 };
+  const b = structuredClone(a);
+  b.resolution!.slowMotionRemaining = 0.3;
+  b.resolution!.impact = 1;
+  assert.equal(interpolateStates(a, b, 0.5).resolution!.slowMotionRemaining, 0);
+  assert.equal(interpolateStates(a, b, 0.5).resolution!.impact, 0);
+  assert.equal(interpolateStates(a, b, 1).resolution!.impact, 1);
+});
+
 test("watchers never run prediction or extrapolate across an interrupted snapshot stream", () => {
   const server = new GameEngine({ mode: "practice" });
   const sent: InputFrame[] = [];
@@ -194,6 +258,8 @@ test("input history stays bounded when acknowledgements stop", () => {
 
 test("latency and ordered jitter preserve one shot, authoritative damage and eventual acknowledgement", () => {
   const server = new GameEngine({ mode: "practice", seed: 431 });
+  // Keep the practice arsenal, but do not refill it after the outcome sequence.
+  server.state.mode = "versus";
   server.state.platforms = [{ id: "floor", x: 0, y: 1600, w: 4320, h: 200 }];
   server.state.crates = [];
   server.state.players[0].x = 500;

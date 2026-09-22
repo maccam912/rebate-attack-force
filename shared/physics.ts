@@ -34,9 +34,9 @@ export function applyImpulse(player: Player, vx: number, vy: number, spin?: numb
 }
 
 /** Contact normals point away from the solid. Constraint corrections never call this. */
-export function surfaceImpact(player: Player, nx: number, ny: number): void {
+export function surfaceImpact(player: Player, nx: number, ny: number): number {
   const speed = -(player.vx * nx + player.vy * ny);
-  if (speed <= 0) return;
+  if (speed <= 0) return 0;
   const floor = ny < -0.5;
   const bouncing = speed > (floor && player.tumble <= 0 ? HARD_IMPACT_SPEED : 270);
   const restitution = bouncing ? (floor ? 0.42 : 0.64) : 0;
@@ -44,7 +44,6 @@ export function surfaceImpact(player: Player, nx: number, ny: number): void {
   player.vy += ny * speed * (1 + restitution);
   if (speed > 120) player.impact = Math.max(player.impact, clamp(speed / 1000, 0, 1));
   if (speed > HARD_IMPACT_SPEED) {
-    player.hp = Math.max(0, player.hp - Math.min(75, Math.round((speed - HARD_IMPACT_SPEED) * 0.085 + 3)));
     player.tumble = Math.max(player.tumble, 1.25);
   }
   if (bouncing) {
@@ -59,6 +58,9 @@ export function surfaceImpact(player: Player, nx: number, ny: number): void {
     player.grounded = !bouncing;
     if (speed > 120 && player.tumble > 0) player.vx *= 0.94;
   }
+  // The engine decides immunity and records this for the end-of-turn reveal.
+  return speed > HARD_IMPACT_SPEED
+    ? Math.min(75, Math.round((speed - HARD_IMPACT_SPEED) * 0.085 + 3)) : 0;
 }
 
 /** Damped physical attitude: track the flight arc, retain launched spin, then roll. */

@@ -59,22 +59,26 @@ test("invalid actions stay silent and jump, backflip, grapple and release record
   assert.deepEqual(game.state.soundEvents!.map((event) => event.kind), ["jump", "backflip", "grapple", "release"]);
 });
 
-test("practice water death retains splash and death before same-step respawn", () => {
+test("practice water death preserves the splash, outcome and later respawn sequence", () => {
   const game = new GameEngine({ mode: "practice" });
   const a = game.state.players[0];
   a.x = 25;
   a.y = WATER_Y - PLAYER_RADIUS;
   const checkpoint = game.capture();
   game.step(FIXED_STEP);
+  assert.deepEqual(game.state.soundEvents!.map((event) => event.kind), ["splash"]);
+  assert.equal(a.hp, 100, "the splash precedes its damage outcome");
+  advance(game, 3);
   const sounds = game.state.soundEvents!;
-  assert.deepEqual(sounds.map((event) => event.kind), ["splash", "death", "respawn", "switch"]);
-  assert.equal(a.alive, true, "practice has already respawned the frog before a client sees this state");
+  assert.deepEqual(sounds.filter((event) => event.kind !== "hurt").map((event) => event.kind), ["splash", "death", "explosion", "respawn", "switch"]);
+  assert.equal(a.alive, true, "practice respawns after showing the outcome");
   assert.equal(sounds[0].x, 25);
   assert.equal(sounds[0].y, WATER_Y);
-  assert.notEqual(sounds[2].x, 25, "respawn uses its own location");
+  assert.notEqual(sounds.find((event) => event.kind === "respawn")!.x, 25, "respawn uses its own location");
   const result = game.capture();
   game.restore(checkpoint);
   game.step(FIXED_STEP);
+  advance(game, 3);
   assert.deepEqual(game.capture(), result, "replay preserves the event sequence and locations");
 });
 
@@ -90,13 +94,15 @@ test("landings and hard terrain or frog collisions are audible without resting c
   Object.assign(a, { y: 1000 - PLAYER_RADIUS - 1, vy: 1000, grounded: false });
   game.step(FIXED_STEP);
   assert.equal(events(game, "bounce").length, 1);
-  assert.equal(events(game, "hurt").length, 1);
+  assert.equal(events(game, "hurt").length, 0, "active terrain traversal is harmless");
   assert.ok(a.vy < 0);
   Object.assign(a, { x: 700, y: 700, vx: 1100, vy: 0, grounded: false });
   Object.assign(b, { x: 733, y: 700, vx: 0, vy: 0, grounded: false });
   game.step(FIXED_STEP);
   assert.equal(events(game, "bounce").length, 2, "iterative body separation emits one impact for the pair");
-  assert.equal(events(game, "hurt").length, 3, "both bodies register actual collision damage");
+  assert.equal(events(game, "hurt").length, 0, "hurt cues wait for damage close-ups");
+  assert.ok(game.state.resolution!.pendingDamage[a.id] > 0);
+  assert.ok(game.state.resolution!.pendingDamage[b.id] > 0);
 });
 
 test("projectile impacts persist after the visual explosion disappears", () => {
@@ -109,7 +115,7 @@ test("projectile impacts persist after the visual explosion disappears", () => {
   assert.equal(game.state.projectiles.length, 0);
   assert.equal(events(game, "explosion").length, 1);
   assert.equal(events(game, "explosion")[0].weapon, "rocket");
-  advance(game, 0.6);
+  advance(game, 0.9);
   assert.equal(game.state.explosions.length, 0);
   assert.equal(events(game, "explosion").length, 1);
 });
@@ -125,7 +131,7 @@ test("mine arming, triggering and detonation each emit one cue", () => {
   assert.equal(events(game, "mineArm").length, 0);
   assert.equal(events(game, "mineTrigger").length, 0);
   game.command(a.id, { type: "endTurn" });
-  game.step(FIXED_STEP);
+  advance(game, 0.4);
   assert.equal(events(game, "mineArm").length, 1);
   advance(game, 0.1);
   assert.equal(events(game, "mineTrigger").length, 1);
@@ -169,6 +175,8 @@ test("older snapshots acquire sound fields and match completion plays victory on
   a.x = 25;
   a.y = WATER_Y - PLAYER_RADIUS;
   game.step(FIXED_STEP);
+  assert.equal(events(game, "victory").length, 0, "water outcomes precede victory");
+  advance(game, 3);
   assert.equal(game.state.phase, "finished");
   assert.equal(events(game, "victory").length, 1);
   advance(game, 1);

@@ -79,7 +79,7 @@ test("team victory waits for all surviving frogs to settle, including a falling 
   game.removePlayer("c");
   assert.equal(game.state.phase, "settling");
   assert.equal(game.state.winnerId, null);
-  advance(game, .5);
+  advance(game, 3);
   assert.equal(falling.alive, false);
   assert.equal(game.state.winnerId, "a");
 });
