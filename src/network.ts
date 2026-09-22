@@ -9,6 +9,7 @@ export type LobbyState = {
   players: Team[];
   started: boolean;
   maxTeams: number | null;
+  mineCount: number;
 };
 
 type Callbacks = {
@@ -97,6 +98,9 @@ export class RoomConnection {
   }
   configureTeam(teamId: string, settings: TeamSettings) {
     if (this.connected) this.room?.send("teamSettings", { teamId, ...settings });
+  }
+  configureMines(mineCount: number) {
+    if (this.connected) this.room?.send("mineSettings", { mineCount });
   }
   addBot() {
     if (this.connected) this.room?.send("addBot");

@@ -2,7 +2,7 @@ import { Room, ServerError, type Client } from "@colyseus/core";
 import { FIXED_STEP, GameEngine } from "../shared/game";
 import { BotController } from "../shared/bots";
 import type { GameCommand, PlayerInput, Team, WeaponId } from "../shared/types";
-import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, teamColor, validTeamSettings } from "../shared/settings";
+import { DEFAULT_MINE_COUNT, DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, MAX_MINES, teamColor, validMineCount, validTeamSettings } from "../shared/settings";
 import { MAX_SEQUENCE_GAP, type ServerState } from "../shared/protocol";
 import { WEAPON_IDS } from "../shared/weapons";
 
@@ -57,6 +57,7 @@ export class AttackRoom extends Room {
   private sequences = new Map<string, number>();
   private bots = new BotController();
   private botNumber = 0;
+  private mineCount = DEFAULT_MINE_COUNT;
 
   async onCreate() {
     this.maxClients = this.maxTeams ?? Infinity;
@@ -143,6 +144,23 @@ export class AttackRoom extends Room {
       if (!team) return;
       team.frogs = message.frogs;
       team.hp = message.hp;
+      this.broadcast("lobby", this.lobby());
+    });
+    this.onMessage("mineSettings", (client, message: unknown) => {
+      if (!this.consume(client, "settings", 20)) return;
+      if (client.sessionId !== this.hostId) {
+        client.send("notice", "Only the room host can change mine settings.");
+        return;
+      }
+      if (this.game) {
+        client.send("notice", "Mine settings are fixed once the match starts.");
+        return;
+      }
+      if (!record(message) || !validMineCount(message.mineCount)) {
+        client.send("notice", `Choose 0–${MAX_MINES} starting mines.`);
+        return;
+      }
+      this.mineCount = message.mineCount;
       this.broadcast("lobby", this.lobby());
     });
     this.onMessage("addBot", (client) => {
@@ -289,6 +307,7 @@ export class AttackRoom extends Room {
       players: [...this.guests.values()],
       mode: "versus",
       seed: Date.now(),
+      mineCount: this.mineCount,
     });
     this.bots = new BotController();
     this.lastInput.clear();
@@ -328,6 +347,7 @@ export class AttackRoom extends Room {
       players: [...this.guests.values()],
       started: this.game !== null,
       maxTeams: this.maxTeams,
+      mineCount: this.mineCount,
     };
   }
 

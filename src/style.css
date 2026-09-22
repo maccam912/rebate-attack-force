@@ -99,6 +99,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .team-settings label { flex: 1; min-width: 0; font-size: 11px; color: var(--dim); }
 .team-settings input { display: block; width: 100%; padding: 8px; margin-top: 7px; background: #ffffff09; border: 1px solid var(--line); }
 .team-settings input:disabled { opacity: .7; }
+.mine-settings { align-items: center; }
+.mine-settings label { flex: 0 0 105px; }
+.mine-settings p { margin: 0; font-size: 11px; color: var(--dim); line-height: 1.6; }
 .controller-label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; color: var(--dim); font-size: 10px; }
 .controller-label select { min-width: 88px; padding: 5px; background: #173329; border: 1px solid var(--line); }
 .team-actions { display: flex; gap: 8px; margin-bottom: 16px; }

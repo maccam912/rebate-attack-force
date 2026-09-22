@@ -7,6 +7,7 @@ import { AttackRoom } from "../server/AttackRoom";
 import { serverMaxTeams } from "../server/capacity";
 import type { GameEngine } from "../shared/game";
 import type { ServerState } from "../shared/protocol";
+import { DEFAULT_MINE_COUNT, MAX_MINES } from "../shared/settings";
 import type { LobbyState } from "../src/network";
 
 const server = createGameServer();
@@ -383,6 +384,59 @@ test("host configures teams; rejoining from a fresh client restores the same tea
   assert.equal(visitorBack.state!.winnerId, visitorId);
   assert.equal(visitorBack.state!.players.filter((p) => p.teamId === hostId && p.alive).length, 0);
   await visitorBack.room.leave();
+});
+
+test("host configures starting mines; settings survive host migration, reconnect and restart", { timeout: 10000 }, async () => {
+  const host = await create("Captain");
+  const guest = await join(host.room.roomId, "Friend");
+  await waitFor(() => host.lobby?.players.length === 2 && !!guest.lobby, "mine settings lobby");
+  assert.equal(host.lobby!.mineCount, DEFAULT_MINE_COUNT);
+  assert.equal(guest.lobby!.mineCount, DEFAULT_MINE_COUNT);
+  guest.room.send("mineSettings", { mineCount: 6 });
+  await waitFor(() => guest.notices.length === 1, "guest cannot configure mines");
+  assert.match(guest.notices[0], /Only the room host/);
+  assert.equal(host.lobby!.mineCount, DEFAULT_MINE_COUNT);
+
+  const invalidSettings = [null, [], {}, { mineCount: "6" }, { mineCount: -1 },
+    { mineCount: MAX_MINES + 1 }, { mineCount: 1.5 }, { mineCount: NaN }, { mineCount: Infinity }];
+  for (const message of invalidSettings) host.room.send("mineSettings", message);
+  await waitFor(() => host.notices.length === invalidSettings.length, "invalid mine settings rejected");
+  assert.equal(host.lobby!.mineCount, DEFAULT_MINE_COUNT);
+  for (const mineCount of [MAX_MINES, 0, 6]) {
+    host.room.send("mineSettings", { mineCount });
+    await waitFor(() => host.lobby?.mineCount === mineCount && guest.lobby?.mineCount === mineCount,
+      "mine settings shared with all clients");
+  }
+
+  const token = host.room.reconnectionToken;
+  host.room.reconnection.enabled = false;
+  host.room.connection.close();
+  await waitFor(() => guest.lobby?.hostId === guest.room.sessionId, "mine settings host migration");
+  assert.equal(guest.lobby!.mineCount, 6);
+  const restored = observe(await new Client(endpoint).reconnect(token));
+  await waitFor(() => restored.lobby?.mineCount === 6, "reconnection restores mine settings");
+  assert.equal(restored.room.sessionId, host.room.sessionId);
+  assert.equal(restored.lobby!.hostId, guest.room.sessionId);
+  restored.room.send("mineSettings", { mineCount: 0 });
+  await waitFor(() => restored.notices.length === 1, "former host cannot change mines");
+  assert.equal(guest.lobby!.mineCount, 6);
+
+  guest.room.send("start");
+  await waitFor(() => !!guest.state && !!restored.state, "match starts with configured mines");
+  assert.equal(guest.state!.mines.length, 6);
+  assert.deepEqual(restored.state!.mines, guest.state!.mines);
+  guest.room.send("mineSettings", { mineCount: 0 });
+  await waitFor(() => guest.notices.length === 2, "mine settings frozen after start");
+  assert.match(guest.notices[1], /fixed once the match starts/);
+  assert.equal(guest.lobby!.mineCount, 6);
+  const epoch = guest.state!.net!.epoch;
+  guest.room.send("restart");
+  await waitFor(() => guest.state!.net!.epoch !== epoch && restored.state!.net!.epoch !== epoch,
+    "restarted match retains mine settings");
+  assert.equal(guest.state!.mines.length, 6);
+  assert.equal(restored.state!.mines.length, 6);
+  assert.equal(guest.lobby!.mineCount, 6);
+  await Promise.all([guest.room.leave(), restored.room.leave()]);
 });
 
 test("sequenced prediction frames acknowledge once and reject stale, forged and accelerated actions", { timeout: 10000 }, async () => {

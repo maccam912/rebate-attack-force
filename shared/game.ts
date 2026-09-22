@@ -13,7 +13,7 @@ import type {
 } from "./types.js";
 
 import { ropeFixedLength, ropePathLength, updateRopePath } from "./rope.js";
-import { teamColor, teamSettings } from "./settings.js";
+import { DEFAULT_MINE_COUNT, teamColor, teamSettings, validMineCount } from "./settings.js";
 import { createInventory, WEAPON_CATALOG, WEAPON_IDS, type WeaponDefinition } from "./weapons.js";
 import type { GameSnapshot } from "./protocol.js";
 import { applyImpulse, GRAVITY, WALK_SPEED, HARD_IMPACT_SPEED, limitBodySpeed, surfaceImpact, updateBodyAttitude } from "./physics.js";
@@ -36,6 +36,8 @@ export const MAX_SOUND_EVENTS = 128;
 
 // A normal jump can land on a frog; a longer fall becomes a stomp.
 const STOMP_SPEED = 560;
+const MINE_RADIUS = 8;
+const MINE_SPACING = 48;
 
 const clamp = (value: number, low: number, high: number) =>
   Math.max(low, Math.min(high, value));
@@ -223,6 +225,7 @@ export class GameEngine {
     players.forEach((player) => this.inputs.set(player.id, blankInput(player.lookAt)));
     if (firstTeam.connected) this.lastFrog.set(firstTeam.id, firstFrog.id);
     this.spawnCrates();
+    this.seedMines(validMineCount(options.mineCount) ? options.mineCount : DEFAULT_MINE_COUNT);
     if (!firstTeam.connected) this.beginSettling();
   }
 
@@ -1365,6 +1368,37 @@ export class GameEngine {
         weapon: WEAPON_IDS[Math.floor(this.random() * WEAPON_IDS.length)]!,
       })),
     ];
+  }
+
+  private seedMines(count: number): void {
+    if (count === 0) return;
+    const candidates: Point[] = [];
+    const clearance = WEAPON_CATALOG.mine.range + PLAYER_RADIUS;
+    for (const platform of this.state.platforms) {
+      for (let x = platform.x + MINE_SPACING / 2; x <= platform.x + platform.w - MINE_SPACING / 2; x += MINE_SPACING) {
+        const y = platform.y - MINE_RADIUS;
+        if (y + MINE_RADIUS >= this.state.waterY ||
+          this.state.players.some((player) => Math.hypot(player.x - x, player.y - y) < clearance) ||
+          this.state.platforms.some((other) => other !== platform &&
+            x + MINE_RADIUS > other.x && x - MINE_RADIUS < other.x + other.w &&
+            y + MINE_RADIUS > other.y && y - MINE_RADIUS < other.y + other.h)) continue;
+        candidates.push({ x, y });
+      }
+    }
+    // Shuffle a finite set: completely occupied ledges can reduce safe capacity,
+    // but never cause an unbounded search or traps beneath starting frogs.
+    for (let index = candidates.length - 1; index > 0; index--) {
+      const other = Math.floor(this.random() * (index + 1));
+      [candidates[index], candidates[other]] = [candidates[other]!, candidates[index]!];
+    }
+    for (const point of candidates) {
+      if (this.state.mines.length >= count) break;
+      if (this.state.mines.some((mine) => Math.hypot(mine.x - point.x, mine.y - point.y) < MINE_SPACING)) continue;
+      this.state.mines.push({
+        id: this.id("mine"), ownerId: "", ...point, vx: 0, vy: 0,
+        kind: "mine", placedTurn: 0, fuse: null, settled: true,
+      });
+    }
   }
 
   private raycast(

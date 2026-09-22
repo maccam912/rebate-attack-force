@@ -117,6 +117,7 @@ export interface Projectile {
 
 export interface Mine {
   id: string;
+  /** Empty for neutral mines placed in the arena before the match. */
   ownerId: string;
   x: number;
   y: number;
@@ -198,4 +199,6 @@ export interface GameOptions {
   players?: { id: string; name: string; color?: string; frogs?: number; hp?: number; connected?: boolean; bot?: boolean }[];
   mode?: GameMode;
   seed?: number;
+  /** Maximum starting mines; crowded arenas use only safely available positions. */
+  mineCount?: number;
 }

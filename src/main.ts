@@ -17,7 +17,7 @@ import { GameAudio, type SoundName } from "./audio";
 import { GameSoundDirector } from "./game-audio";
 import { createTouchControls } from "./touch-controls";
 
-import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, teamColor, validTeamSettings } from "../shared/settings";
+import { DEFAULT_MINE_COUNT, DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, MAX_MINES, teamColor, validMineCount, validTeamSettings } from "../shared/settings";
 
 const logo = `<svg viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M5 30 17 8l16 5 15-3 11 22-8 22H17Z" fill="#cde47b"/><path d="M17 40c-5-17 5-24 15-18 11-7 22 3 17 18-9 10-24 10-32 0Z" fill="#18372a"/><circle cx="24" cy="27" r="5" fill="#e5ebbd"/><circle cx="41" cy="27" r="5" fill="#e5ebbd"/><circle cx="25" cy="27" r="2" fill="#18372a"/><circle cx="40" cy="27" r="2" fill="#18372a"/><path d="M27 38q6 5 12-1" stroke="#d0e77e" stroke-width="2" stroke-linecap="round"/><path d="m9 47-5 9 15-2M51 50l8 7 3-15" fill="#cde47b"/></svg>`;
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -44,7 +44,7 @@ app.innerHTML = `
   <div class="menu-backdrop" id="menu-overlay"><section class="panel menu-panel" aria-label="Game menu"><div class="menu-brand">${logo}<h1>REBATE <span>ATTACK FORCE</span></h1></div><button class="secondary-button" id="resume-button" hidden>Resume game <span>Esc</span></button><div id="play-panel"></div><div class="connection-status" id="connection-status">THE SCRAPYARD IS OPEN</div></section></div>
   <div class="match-over" id="match-over" hidden><div><div class="eyebrow">THE SCRAPYARD HAS SPOKEN</div><h2 id="winner-name"></h2><button class="primary-button" id="rematch-button">Run it back <span>↗</span></button></div></div>
 </main>
-<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. Retreat while your shot travels or its fuse burns. A melee hit or explosion ends your control, and the camera follows the fallout. Damage adds up through launches, collisions, and wall hits, then appears one frog at a time after everyone settles. Knocked-out frogs burst and can start another chain reaction. Your own movement and landings are safe; water is a one-way trip.</p><p class="touch-help"><strong>On your phone:</strong> use the left pad to walk and pump a swing; drag it up or down to reel the rope. Drag the right pad to aim, or tap the arena to mark a target. Tap Hook to attach and Release to let go. Tap Jump twice quickly to backflip. Choose a weapon in Arsenal, then hold Fire to charge and release to shoot. Landscape gives you a wider view.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Mines arm on later turns; approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares one device, with humans or AI bots. Online mode gives you a private room link; the server sets its team capacity. The host can add bots and choose each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice returns control to you after the fallout and respawns knocked-out frogs. These maps, frogs, and synthesized sound effects are original. Use the ♪ button to mute or enable sound.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
+<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. Retreat while your shot travels or its fuse burns. A melee hit or explosion ends your control, and the camera follows the fallout. Damage adds up through launches, collisions, and wall hits, then appears one frog at a time after everyone settles. Knocked-out frogs burst and can start another chain reaction. Your own movement and landings are safe; water is a one-way trip.</p><p class="touch-help"><strong>On your phone:</strong> use the left pad to walk and pump a swing; drag it up or down to reel the rope. Drag the right pad to aim, or tap the arena to mark a target. Tap Hook to attach and Release to let go. Tap Jump twice quickly to backflip. Choose a weapon in Arsenal, then hold Fire to charge and release to shoot. Landscape gives you a wider view.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Deployed mines arm on later turns; starting mines are armed from turn one. Approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares one device, with humans or AI bots. Online mode gives you a private room link; the server sets its team capacity. The host can add bots, seed the level with mines, and choose each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice returns control to you after the fallout and respawns knocked-out frogs. These maps, frogs, and synthesized sound effects are original. Use the ♪ button to mute or enable sound.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -75,6 +75,7 @@ const localRoster = [
   { id: "p2", name: "Rusty", bot: false },
 ];
 let nextLocalId = 3;
+let localMineCount = DEFAULT_MINE_COUNT;
 let localBots = new BotController();
 let aim = { x: 440, y: 1400 };
 let pointer: { x: number; y: number } | null = null;
@@ -290,8 +291,11 @@ function modeLabel() {
 function settingsMarkup(id: string, name: string, settings: TeamSettings, editable: boolean) {
   return `<fieldset class="team-settings" data-team="${escapeHtml(id)}"><legend>${escapeHtml(name)} · team setup</legend><label>Frogs<input type="number" data-setting="frogs" aria-label="${escapeHtml(name)} frogs" min="1" max="${MAX_FROGS}" step="1" required value="${settings.frogs}" ${editable ? "" : "disabled"}></label><label>HP per frog<input type="number" data-setting="hp" aria-label="${escapeHtml(name)} HP per frog" min="1" max="${MAX_HP}" step="1" required value="${settings.hp}" ${editable ? "" : "disabled"}></label></fieldset>`;
 }
+function mineSettingsMarkup(mineCount: number, editable: boolean) {
+  return `<fieldset class="team-settings mine-settings"><legend>Level setup</legend><label for="starting-mines">Starting mines<input id="starting-mines" type="number" data-mine-count min="0" max="${MAX_MINES}" step="1" required value="${mineCount}" aria-describedby="starting-mines-help" ${editable ? "" : "disabled"}></label><p id="starting-mines-help">Armed from turn one. 0 means none; ${MAX_MINES} maximum. Crowded levels may fit fewer.</p></fieldset>`;
+}
 function localSetupMarkup() {
-  return `<div class="roster local-roster">${localRoster.map((team, index) => {
+  return `${mineSettingsMarkup(localMineCount, true)}<div class="roster local-roster">${localRoster.map((team, index) => {
     const name = team.id === "p1" ? playerName : team.name;
     return `<div class="lobby-team"><div class="player-row"><span class="avatar" style="color:${teamColor(index)}">♟</span><div class="player-info"><strong>${escapeHtml(name)}</strong>${team.id === "p1" ? "<small>You · Human</small>" : `<label class="controller-label">Controlled by<select data-local-control="${team.id}" aria-label="${escapeHtml(name)} controller"><option value="human" ${team.bot ? "" : "selected"}>Human</option><option value="bot" ${team.bot ? "selected" : ""}>AI bot</option></select></label>`}</div>${team.id !== "p1" && localRoster.length > 2 ? `<button class="remove-team" data-remove-local="${team.id}" aria-label="Remove ${escapeHtml(name)}">Remove</button>` : ""}</div>${settingsMarkup(team.id, name, localTeams[team.id], true)}</div>`;
   }).join("")}</div><div class="team-actions"><button class="secondary-button" id="add-local-player">Add player</button><button class="secondary-button" id="add-local-bot">Add bot</button></div>`;
@@ -307,7 +311,7 @@ function addLocalTeam(bot: boolean) {
   $("start-button").scrollIntoView({ block: "nearest" });
 }
 function validSetup() {
-  return Array.from($("play-panel").querySelectorAll<HTMLInputElement>("[data-setting]")).every((input) => input.reportValidity());
+  return Array.from($("play-panel").querySelectorAll<HTMLInputElement>("[data-setting], [data-mine-count]")).every((input) => input.reportValidity());
 }
 $("play-panel").addEventListener("change", (event) => {
   const field = event.target;
@@ -316,7 +320,15 @@ $("play-panel").addEventListener("change", (event) => {
     if (team) team.bot = field.value === "bot";
     return;
   }
-  if (!(field instanceof HTMLInputElement) || !field.dataset.setting) return;
+  if (!(field instanceof HTMLInputElement)) return;
+  if (field.hasAttribute("data-mine-count")) {
+    const mineCount = field.valueAsNumber;
+    if (!validMineCount(mineCount)) { field.reportValidity(); return; }
+    if (network) network.configureMines(mineCount);
+    else localMineCount = mineCount;
+    return;
+  }
+  if (!field.dataset.setting) return;
   const group = field.closest<HTMLFieldSetElement>("[data-team]")!;
   const settings = {
     frogs: group.querySelector<HTMLInputElement>('[data-setting="frogs"]')!.valueAsNumber,
@@ -390,7 +402,7 @@ function renderPanel() {
     const ready = lobby.players.filter((p) => p.connected).length;
     const full = typeof lobby.maxTeams === "number" && lobby.players.length >= lobby.maxTeams;
     const teamCount = `${lobby.players.length}${typeof lobby.maxTeams === "number" ? `/${lobby.maxTeams}` : ""} TEAMS`;
-    panel.innerHTML = `<div class="panel-title"><h2>Build your teams.</h2><span class="tiny-tag">${teamCount}</span></div><div class="session-title"><i class="live-dot"></i> Private room · no accounts</div><div class="room-code"><code>${escapeHtml(lobby.roomId)}</code><button class="copy-button" id="copy-invite">Copy invite</button></div><div class="roster">${lobby.players.map((p) => `<div class="lobby-team"><div class="player-row"><span class="avatar" style="color:${p.color}">♟</span><div class="player-info"><strong>${escapeHtml(p.name)}${p.id === network?.sessionId ? " · you" : ""}</strong><small>${p.bot ? "AI bot · ready" : !p.connected ? "Offline · seat saved" : p.id === lobby?.hostId ? "Room host" : "Ready for trouble"}</small></div>${host && p.bot ? `<button class="remove-team" data-remove-bot="${escapeHtml(p.id)}" aria-label="Remove ${escapeHtml(p.name)}">Remove bot</button>` : ""}</div>${settingsMarkup(p.id, p.name, p, host)}</div>`).join("")}</div>${host ? `<button class="secondary-button" id="add-bot" ${full ? "disabled" : ""}>${full ? "Server team capacity reached" : "Add bot"}</button>` : ""}<p class="waiting">${ready < 2 ? host ? "Add a bot or invite a friend. Two ready teams are needed to start." : "The host can add a bot or invite another player to start." : host ? "Choose each team’s frogs and starting HP, then start when ready." : "The host chooses each team’s frogs and starting HP."} Living frogs take turns in order.</p><button class="primary-button" id="launch-room" ${!host || ready < 2 ? "disabled" : ""}>${host ? "Start the match" : "Waiting for host"} <span>↗</span></button><button class="secondary-button" id="leave-button">Leave room</button>`;
+    panel.innerHTML = `<div class="panel-title"><h2>Build your teams.</h2><span class="tiny-tag">${teamCount}</span></div><div class="session-title"><i class="live-dot"></i> Private room · no accounts</div><div class="room-code"><code>${escapeHtml(lobby.roomId)}</code><button class="copy-button" id="copy-invite">Copy invite</button></div>${mineSettingsMarkup(lobby.mineCount ?? DEFAULT_MINE_COUNT, host)}<div class="roster">${lobby.players.map((p) => `<div class="lobby-team"><div class="player-row"><span class="avatar" style="color:${p.color}">♟</span><div class="player-info"><strong>${escapeHtml(p.name)}${p.id === network?.sessionId ? " · you" : ""}</strong><small>${p.bot ? "AI bot · ready" : !p.connected ? "Offline · seat saved" : p.id === lobby?.hostId ? "Room host" : "Ready for trouble"}</small></div>${host && p.bot ? `<button class="remove-team" data-remove-bot="${escapeHtml(p.id)}" aria-label="Remove ${escapeHtml(p.name)}">Remove bot</button>` : ""}</div>${settingsMarkup(p.id, p.name, p, host)}</div>`).join("")}</div>${host ? `<button class="secondary-button" id="add-bot" ${full ? "disabled" : ""}>${full ? "Server team capacity reached" : "Add bot"}</button>` : ""}<p class="waiting">${ready < 2 ? host ? "Add a bot or invite a friend. Two ready teams are needed to start." : "The host can add a bot or invite another player to start." : host ? "Choose starting mines, each team’s frogs and HP, then start when ready." : "The host chooses starting mines, each team’s frogs and HP."} Living frogs take turns in order.</p><button class="primary-button" id="launch-room" ${!host || ready < 2 ? "disabled" : ""}>${host ? "Start the match" : "Waiting for host"} <span>↗</span></button><button class="secondary-button" id="leave-button">Leave room</button>`;
     $("copy-invite").onclick = copyInvite;
     if (host) {
       $("add-bot").onclick = () => { if (validSetup()) network?.addBot(); };
@@ -440,6 +452,7 @@ function startLocal() {
   engine = new GameEngine({
     mode: selectedMode === "practice" ? "practice" : "versus",
     seed: crypto.getRandomValues(new Uint32Array(1))[0],
+    mineCount: selectedMode === "local" ? localMineCount : DEFAULT_MINE_COUNT,
     players: selectedMode === "local"
       ? localRoster.map((team) => ({ ...team, name: team.id === "p1" ? playerName : team.name, ...localTeams[team.id] }))
       : [{ id: "p1", name: playerName }, { id: "p2", name: "Target practice" }],
@@ -482,8 +495,17 @@ async function connectOnline(roomId?: string, rejoin = false) {
   const connection = new RoomConnection({
     onLobby(next) {
       if (network !== connection) return;
+      const mineOnlyUpdate = screen === "lobby" && lobby !== null &&
+        JSON.stringify({ ...lobby, mineCount: next.mineCount }) === JSON.stringify(next);
       lobby = next;
       if (!next.started) {
+        // Keep buttons mounted when a mine-setting echo arrives between mouse down and up.
+        const mineField = $<HTMLInputElement>("starting-mines");
+        if (mineOnlyUpdate && mineField) {
+          if (document.activeElement !== mineField)
+            mineField.value = String(next.mineCount ?? DEFAULT_MINE_COUNT);
+          return;
+        }
         screen = "lobby";
         renderPanel();
       }

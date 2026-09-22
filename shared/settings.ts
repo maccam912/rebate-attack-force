@@ -2,6 +2,8 @@ import type { TeamSettings } from "./types.js";
 
 export const MAX_FROGS = 6;
 export const MAX_HP = 500;
+export const DEFAULT_MINE_COUNT = 0;
+export const MAX_MINES = 50;
 export const DEFAULT_TEAM_SETTINGS: TeamSettings = { frogs: 1, hp: 100 };
 
 const TEAM_COLORS = ["#9fe870", "#ffb86b", "#b9a2ff", "#71dce4"];
@@ -23,6 +25,10 @@ export function validTeamSettings(value: unknown): value is TeamSettings {
   const { frogs, hp } = value as TeamSettings;
   return Number.isInteger(frogs) && frogs >= 1 && frogs <= MAX_FROGS &&
     Number.isInteger(hp) && hp >= 1 && hp <= MAX_HP;
+}
+
+export function validMineCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_MINES;
 }
 
 export function teamSettings(value: Partial<TeamSettings>): TeamSettings {

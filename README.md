@@ -15,7 +15,7 @@ Open **http://localhost:5173**. Vite and the Colyseus room server start together
 
 - **Practice:** unlimited movement time, a target frog, respawns, and all 24 weapons refilled every turn.
 - **Local:** share one device and take turns, or choose an AI bot as your opponent. Add more human or bot teams in the setup screen.
-- **Online:** create a private room, copy its invite link, and bring friends or use **Add bot** to play alone. Everyone chooses a callsign; no accounts are involved. The host adds/removes bots and chooses each team’s frog count and starting HP before starting the match. The server operator can configure room capacity; there is no fixed four-team limit.
+- **Online:** create a private room, copy its invite link, and bring friends or use **Add bot** to play alone. Everyone chooses a callsign; no accounts are involved. The host adds/removes bots, chooses each team’s frog count and starting HP, and sets the number of starting mines before starting the match. The server operator can configure room capacity; there is no fixed four-team limit.
 
 Bots aim and fire stocked weapons, avoid friendly fire when choosing shots, and move or jump along platforms to find a shot. They follow the same ammunition, damage, and turn rules as humans. Online bots run on the server. An online room pauses when every human disconnects, even if it contains bots.
 
@@ -79,7 +79,9 @@ The arsenal uses one shared catalog for simulation, aiming hints, and the interf
 
 These have different trajectories, fuses, reach, recoil, fragmentation, bounce, and launch forces. Sticky bombs attach to terrain or frogs; the boomerang curves back toward its owner; vacuum blasts pull; the hairdryer pushes without direct damage. Melee requires line of sight. Air support enters from above the aimed column and strikes the first obstruction. Terrain reduces blast damage and radial force.
 
-Mines persist across turns and arm only after their deployment turn. Only the active frog approaching within visible range starts the warning fuse, including the owner on a later turn. Untriggered traps do not hold up turn changes. The spring mine sacrifices direct damage for a huge upward launch and the resulting fall.
+**Starting mines:** in local setup or the online lobby, choose **0–50 mines** to scatter across the level (default: 0). Only the online host can change this setting, and it is fixed when the match starts. Starting mines sit on platforms away from the frogs’ spawn positions and are armed from turn one. Crowded levels may contain fewer mines if there is not enough safe space. Restarting keeps the chosen count and scatters a fresh set.
+
+Mines persist across turns. Mines deployed as weapons arm only after their deployment turn. Only the active frog approaching within visible range starts the warning fuse, including the owner on a later turn. Untriggered traps do not hold up turn changes. The spring mine sacrifices direct damage for a huge upward launch and the resulting fall.
 
 Online, the active player runs the same simulation locally with sequenced input and command prediction. Server checkpoints acknowledge inputs; the client restores authoritative state and replays pending input, smoothing small visible corrections and snapping large corrections or life-state changes. Other players use a 120 ms snapshot interpolation buffer for bodies, ropes, projectiles, traps, and effects. They do not independently predict remote combat. Server time, damage, inventory, and turns remain authoritative; client poses and clocks are never accepted. Reconnecting and turn changes reset prediction history.
 
@@ -126,6 +128,7 @@ npm run build
 # With npm run dev running in another terminal:
 npm run test:browser
 npm run test:bots
+npm run test:mines
 npm run test:mobile
 npm run test:audio
 # Optional local oMLX visual check, after screenshots exist:
@@ -134,7 +137,7 @@ npm run test:visual
 
 The optional visual check uses your local oMLX vision model and a blank-image negative control; it skips when the service or a supported model is unavailable. Override with `OMLX_BASE_URL`, `OMLX_API_KEY`, and `OMLX_VISION_MODEL`.
 
-The unit suite covers deterministic simulation and checkpoint replay, latency and jitter, all weapon families, mystery pickups, saved ammunition, rope momentum, damaging impacts, body collisions, mine arming, deadlines, drowning, delayed victory, sound event delivery, movement foley, bot turns, large rosters, and complete matches. Integration tests use real Colyseus clients on an ephemeral local port, including server capacity and bot room lifecycle checks. The browser smoke test drives two actual browser clients and saves screenshots to `test-results/`; the bot smoke test checks local and online bot setup and play. The mobile smoke test sends browser touch input, including simultaneous fingers, and checks phone layouts, movement and aim, jumps, grappling, firing, and interrupted gestures. It uses Chromium touch emulation; physical-device testing is still useful for browser chrome, cutouts, and handling. The audio smoke test uses the Vite dev server to measure real Web Audio output and check every cue, weapon, mute/unlock controls, and audio graph cleanup.
+The unit suite covers deterministic simulation and checkpoint replay, latency and jitter, all weapon families, mystery pickups, saved ammunition, rope momentum, damaging impacts, body collisions, mine arming, deadlines, drowning, delayed victory, sound event delivery, movement foley, bot turns, large rosters, and complete matches. Integration tests use real Colyseus clients on an ephemeral local port, including server capacity and bot room lifecycle checks. The browser smoke test drives two actual browser clients and saves screenshots to `test-results/`; the bot smoke test checks local and online bot setup and play. The mine smoke test checks host controls, input validation, local and online placement, restart persistence, and phone layouts. The mobile smoke test sends browser touch input, including simultaneous fingers, and checks phone layouts, movement and aim, jumps, grappling, firing, and interrupted gestures. It uses Chromium touch emulation; physical-device testing is still useful for browser chrome, cutouts, and handling. The audio smoke test uses the Vite dev server to measure real Web Audio output and check every cue, weapon, mute/unlock controls, and audio graph cleanup.
 
 Browser tests use system Chrome on macOS when present. Otherwise install Chromium with `npx playwright install chromium`, or set `CHROME_PATH`. To check the production bundle served by `npm start`, use `BASE_URL=http://localhost:2567 npm run test:browser` after building.
 
