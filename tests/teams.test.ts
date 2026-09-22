@@ -33,8 +33,9 @@ test("team settings create distinct supported frogs with independent HP and inve
   }
   advance(game, 1);
   assert.ok(game.state.players.every((p) => p.alive && p.grounded));
-  game.state.players[0].inventory.rocket = 3;
-  assert.equal(game.state.players[1].inventory.rocket, 0);
+  const otherAmmo = game.state.players[1].inventory.rocket;
+  game.state.players[0].inventory.rocket = 17;
+  assert.equal(game.state.players[1].inventory.rocket, otherAmmo);
   for (const value of [null, {}, { frogs: 0, hp: 100 }, { frogs: 7, hp: 100 },
     { frogs: 2.5, hp: 100 }, { frogs: 2, hp: NaN }, { frogs: 2, hp: 501 }, { frogs: 2, hp: "100" }])
     assert.equal(validTeamSettings(value), false);

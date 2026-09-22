@@ -33,9 +33,21 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--lime); outl
 .end-turn { color: #dce8cc; }
 .end-turn:hover { background: #ffffff15; }
 .key { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 5px; border: 1px solid #ffffff30; border-radius: 4px; font-size: 11px; }
-.inventory { display: flex; gap: 4px; }
-.ammo-slot { display: flex; align-items: center; gap: 5px; padding: 8px; min-height: 36px; background: #ffffff09; border: 1px solid var(--line); font-size: 11px; }
-.ammo-slot span { font-size: 18px; color: var(--lime); }
+.arsenal-panel { position: absolute; bottom: 88px; left: 50%; transform: translateX(-50%); width: min(880px, calc(100% - 32px)); max-height: calc(100dvh - 190px); overflow: auto; background: #142d25fa; border: 1px solid #d0e77e50; border-radius: 14px; padding: 22px; z-index: 9; box-shadow: 0 12px 60px #10271bcc; }
+.arsenal-heading { display: flex; justify-content: space-between; gap: 15px; align-items: center; }
+.arsenal-heading h2 { font: 600 34px var(--display); margin: 5px 0 0; }
+.arsenal-intro, .arsenal-footer { font-size: 11px; line-height: 1.6; color: var(--dim); }
+.arsenal-footer { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+.inventory { display: grid; gap: 16px; }
+.arsenal-group h3 { color: var(--lime); font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; margin: 0 0 8px; }
+.arsenal-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.ammo-slot { display: flex; align-items: center; gap: 9px; padding: 10px; min-height: 80px; background: #ffffff06; border: 1px solid var(--line); text-align: left; }
+.ammo-slot:hover:not(:disabled) { background: #d0e77e15; border-color: #d0e77e90; }
+.ammo-slot .weapon-icon { font-size: 23px; min-width: 27px; text-align: center; }
+.ammo-copy { flex: 1; min-width: 0; }
+.ammo-copy strong { display: block; font-size: 12px; line-height: 1.3; color: #eff0d4; }
+.ammo-copy small { display: block; font-size: 10px; line-height: 1.45; color: var(--dim); margin-top: 4px; }
+.ammo-count { font-size: 12px; color: var(--lime); align-self: flex-start; }
 .ammo-slot.selected { border-color: #d0e77e80; background: #d0e77e15; }
 .ammo-slot.selected:disabled { opacity: .65; }
 .objective-toast { position: absolute; bottom: 95px; left: 50%; transform: translateX(-50%); border-radius: 20px; padding: 9px 16px; color: #eff0d4; background: #173329dc; font-size: 12px; pointer-events: none; max-width: 90%; text-align: center; }
@@ -110,12 +122,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--lime); outl
 #app:not([data-screen="playing"]) .arena-bottom, #app:not([data-screen="playing"]) .touch-controls { display: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (pointer: coarse) {
+  .arsenal-panel { bottom: 142px; max-height: calc(100dvh - 230px); }
   #app[data-screen="playing"] .touch-controls { position: absolute; bottom: max(82px, calc(env(safe-area-inset-bottom) + 70px)); left: 12px; right: 12px; display: flex; justify-content: space-between; gap: 5px; }
   .touch-controls button { min-height: 44px; min-width: 44px; padding: 8px; border: 1px solid #ecf4cd33; background: #173329dc; touch-action: none; font-size: 12px; }
   .objective-toast { bottom: 145px; }
   .charging-indicator { bottom: 170px; }
 }
 @media (max-width: 650px) {
+  .arsenal-panel { padding: 15px; }
+  .arsenal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .arsenal-heading h2 { font-size: 28px; }
   .arena-top-tools { top: 12px; right: 12px; gap: 4px; }
   .icon-button { width: 30px; height: 32px; font-size: 17px; }
   .hud { top: 56px; left: 12px; padding: 8px 11px; gap: 12px; }
@@ -126,9 +142,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--lime); outl
   .toolbelt { gap: 3px; }
   .tool-button, .end-turn { padding: 8px 5px; font-size: 10px; gap: 3px; }
   .key { display: none; }
-  .ammo-slot { padding: 5px; min-height: 32px; gap: 3px; }
-  .ammo-slot span { font-size: 15px; }
-  .inventory { gap: 3px; }
+  .ammo-slot { padding: 8px; gap: 6px; }
+  .ammo-slot .weapon-icon { font-size: 19px; min-width: 20px; }
+  .ammo-copy strong { font-size: 11px; }
+  .ammo-copy small { font-size: 9px; }
+  .toolbelt { min-width: 0; }
+  #weapon-tool-label { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
   .menu-backdrop { padding: 58px 16px 16px; }
   .menu-panel { padding: 22px; }
   .menu-brand { padding-bottom: 18px; }

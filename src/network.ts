@@ -1,5 +1,7 @@
 import { Client, Room } from "@colyseus/sdk";
 import type { GameCommand, GameState, PlayerInput, Team, TeamSettings } from "../shared/types";
+import type { ServerState } from "../shared/protocol";
+import { ClientPrediction } from "./prediction";
 
 export type LobbyState = {
   roomId: string;
@@ -26,6 +28,10 @@ export class RoomConnection {
   private readonly client: Client;
   private leaving = false;
   private connected = false;
+  private supportsPrediction = false;
+  private readonly prediction = new ClientPrediction((frame) => {
+    if (this.connected) this.room?.send("input", frame);
+  });
 
   constructor(private readonly callbacks: Callbacks) {
     const endpoint =
@@ -41,6 +47,12 @@ export class RoomConnection {
     return this.room?.roomId ?? "";
   }
   get isConnected() { return this.connected; }
+  get canControl() { return this.connected && this.prediction.canControl; }
+
+  /** Call once per animation frame after updating input, for local prediction or remote interpolation. */
+  frame(dtSeconds: number, nowMs = performance.now()): GameState | null {
+    return this.prediction.advance(dtSeconds, nowMs);
+  }
 
   async create(name: string): Promise<void> {
     await this.leave();
@@ -68,10 +80,13 @@ export class RoomConnection {
   }
 
   input(input: PlayerInput) {
-    if (this.connected) this.room?.send("input", input);
+    this.prediction.input(input);
+    if (this.connected && !this.supportsPrediction) this.room?.send("input", input);
   }
   command(command: GameCommand) {
-    if (this.connected) this.room?.send("command", command);
+    if (!this.connected) return;
+    if (this.supportsPrediction) this.prediction.command(command);
+    else this.room?.send("command", command);
   }
   start() {
     this.room?.send("start");
@@ -89,6 +104,8 @@ export class RoomConnection {
     const room = this.room;
     this.room = null;
     this.connected = false;
+    this.prediction.reset();
+    this.supportsPrediction = false;
     try { localStorage.removeItem(seatKey(room.roomId)); } catch {}
     try {
       await room.leave();
@@ -100,6 +117,8 @@ export class RoomConnection {
   private attach(room: Room) {
     this.room = room;
     this.connected = true;
+    this.prediction.reset();
+    this.supportsPrediction = false;
     const remember = () => {
       try { localStorage.setItem(seatKey(room.roomId), room.reconnectionToken); } catch {}
     };
@@ -109,18 +128,25 @@ export class RoomConnection {
     room.reconnection.maxRetries = 10;
     room.reconnection.maxEnqueuedMessages = 0;
     room.onMessage<LobbyState>("lobby", this.callbacks.onLobby);
-    room.onMessage<GameState>("state", this.callbacks.onState);
+    room.onMessage<ServerState>("state", (state) => {
+      if (this.room !== room) return;
+      this.supportsPrediction = !!state.net;
+      this.prediction.receive(state, room.sessionId);
+      this.callbacks.onState(state);
+    });
     room.onMessage<string>("notice", this.callbacks.onError);
     room.onError((_code, message) =>
       this.callbacks.onError(message || "The room connection failed."),
     );
     room.onDrop(() => {
       this.connected = false;
+      this.prediction.reset();
       this.callbacks.onConnection(false);
       this.callbacks.onError("Connection interrupted. Your team’s turns are skipped while you reconnect…");
     });
     room.onReconnect(() => {
       this.connected = true;
+      this.prediction.reset();
       remember();
       this.callbacks.onConnection(true);
       room.send("sync");

@@ -1,7 +1,8 @@
-import type { GameState, Player, WeaponId } from "../shared/types";
+import type { GameState, Player } from "../shared/types";
+import { WEAPON_CATALOG } from "../shared/weapons";
 
 import type { Camera } from "./camera";
-import { frogPose } from "./frog";
+import { FrogAnimator } from "./frog";
 
 export interface RenderOptions {
   camera: Camera;
@@ -13,11 +14,7 @@ export interface RenderOptions {
   menu: boolean;
 }
 const ink = "#223c34";
-const weaponColors: Record<string, string> = {
-  rocket: "#ef9b62",
-  grenade: "#cee579",
-  pulse: "#b9a5e0",
-};
+const animator = new FrogAnimator();
 function rounded(
   c: CanvasRenderingContext2D,
   x: number,
@@ -93,7 +90,16 @@ export function drawFrog(
   aim?: { x: number; y: number },
   players: Player[] = [],
 ) {
-  const pose = frogPose(player, players, aim);
+  const pose = animator.pose(player, players, aim, time);
+  const speed = Math.hypot(player.vx, player.vy);
+  if (speed > 570 && !player.grounded) {
+    const ux = player.vx / speed, uy = player.vy / speed;
+    const trail = Math.min(56, speed * 0.044);
+    for (const side of [-1, 0, 1]) line(c, [
+      player.x - ux * 29 - uy * side * 14, player.y - uy * 29 + ux * side * 14,
+      player.x - ux * (29 + trail) - uy * side * 14, player.y - uy * (29 + trail) + ux * side * 14,
+    ], "#fff5d77a", side === 0 ? 2.4 : 1.3);
+  }
   c.save();
   c.translate(player.x, player.y);
   c.scale(scale, scale);
@@ -121,6 +127,8 @@ export function drawFrog(
   }
   const bounce = player.grounded ? Math.sin(time * 2.5) * 0.8 : 0;
   c.translate(0, bounce);
+  const squash = Math.max(0, player.impact || 0) * 0.22;
+  c.scale(1 + squash, 1 - squash);
   // Knapsack.
   rounded(c, -23, -5, 12, 21, 5, "#667b5a", ink);
   c.beginPath();
@@ -323,7 +331,6 @@ function crate(
   c: CanvasRenderingContext2D,
   x: number,
   y: number,
-  weapon: WeaponId,
   t: number,
   id: number,
 ) {
@@ -340,15 +347,9 @@ function crate(
   line(c, [13, -13, -13, 10], "#ae733f", 4);
   rounded(c, -20, -18, 40, 6, 1, "#f3d591", ink);
   rounded(c, -19, 10, 38, 6, 1, "#c39153", ink);
-  rounded(c, -7, -10, 14, 15, 2, weaponColors[weapon], ink);
-  text(
-    c,
-    weapon === "rocket" ? "↗" : weapon === "grenade" ? "●" : "ϟ",
-    -4,
-    2,
-    12,
-    ink,
-  );
+  // Every supply box looks identical. Reveal the seeded random weapon on pickup.
+  rounded(c, -7, -10, 14, 15, 2, "#f6df9e", ink);
+  text(c, "?", -4, 2, 13, ink, 800);
   if (Math.sin(t * 2 + id) > 0.6) {
     line(c, [26, -30, 26, -20], "#fff1bd", 2);
     line(c, [21, -25, 31, -25], "#fff1bd", 2);
@@ -404,7 +405,7 @@ export function renderGame(
   c.scale(camera.zoom, camera.zoom);
   c.translate(-camera.x, -camera.y);
   if (s.explosions.some((e) => e.age < 0.2)) {
-    const strength = 3;
+    const strength = Math.min(7, Math.max(...s.explosions.filter((e) => e.age < 0.2).map((e) => e.radius / 42)));
     c.translate(
       Math.sin(o.time * 77) * strength,
       Math.cos(o.time * 93) * strength,
@@ -420,11 +421,35 @@ export function renderGame(
       c,
       box.x,
       box.y,
-      box.weapon,
       o.time,
       Number(String(box.id).replace(/\D/g, "")) || 0,
     );
   const active = s.players.find((p) => p.id === s.activePlayerId);
+  for (const mine of s.mines ?? []) {
+    const def = WEAPON_CATALOG[mine.kind];
+    const armed = s.turn > mine.placedTurn;
+    const triggered = mine.fuse !== null;
+    c.save();
+    c.translate(mine.x, mine.y);
+    if (armed) {
+      c.beginPath();
+      c.arc(0, 0, def.range, 0, Math.PI * 2);
+      c.strokeStyle = triggered ? "#ff7955a0" : "#f4df9435";
+      c.lineWidth = 1.5;
+      c.setLineDash([3, 8]);
+      c.stroke();
+      c.setLineDash([]);
+    }
+    rounded(c, -13, -5, 26, 12, 5, "#314c3d", ink);
+    rounded(c, -9, -9, 18, 7, 3, def.color, ink);
+    circle(c, 0, -7, 3, !armed ? "#819575" : Math.sin(o.time * (triggered ? 35 : 5)) > 0 ? "#ff603e" : "#fff3b1");
+    if (mine.kind === "springMine") line(c, [-7, -1, -3, -5, 0, -1, 4, -5, 8, -1], ink, 2);
+    if (triggered) {
+      c.textAlign = "center";
+      text(c, "!", 0, -21, 22, "#fff0b0", 900);
+    }
+    c.restore();
+  }
   const labels: { x: number; y: number; width: number }[] = [];
   for (const p of s.players) {
     if (!p.alive) continue;
@@ -478,30 +503,37 @@ export function renderGame(
       dy = aim.y - active.y,
       len = Math.hypot(dx, dy) || 1;
     c.globalAlpha = 0.65;
-    if (o.tool === "weapon" && active.hasCrate) {
-      if (active.weapon === "pulse") {
+    if (o.tool === "weapon" && active.hasCrate && active.weapon) {
+      const def = WEAPON_CATALOG[active.weapon];
+      if (def.attack === "airstrike") {
+        c.setLineDash([5, 10]);
+        line(c, [aim.x, camera.y, aim.x, aim.y], "#fff1c3", 2);
+        c.setLineDash([]);
+        c.textAlign = "center";
+        text(c, "INCOMING", aim.x, aim.y - 28, 12, "#fff1c3", 800);
+        c.textAlign = "left";
+      } else if (def.attack === "blast" || def.attack === "melee") {
         c.beginPath();
-        c.arc(
-          active.x + (dx / len) * 92,
-          active.y + (dy / len) * 92,
-          108,
-          0,
-          Math.PI * 2,
-        );
+        if (def.attack === "melee") {
+          const angle = Math.atan2(dy, dx);
+          c.arc(active.x, active.y, def.range, angle - 0.9, angle + 0.9);
+        } else c.arc(active.x + (dx / len) * def.range, active.y + (dy / len) * def.range, def.radius, 0, Math.PI * 2);
         c.strokeStyle = "#fef6cf";
         c.setLineDash([3, 7]);
         c.lineWidth = 1.5;
         c.stroke();
         c.setLineDash([]);
       } else {
-        const speed = (active.weapon === "grenade" ? 630 : 800) * o.power;
+        const speed = def.speed * o.power;
         for (let i = 1; i <= 22; i++) {
           const dt = i * 0.045;
-          const gravity = active.weapon === "grenade" ? 1050 : 0;
-          const x = active.x + ((dx / len) * speed + active.vx * 0.25) * dt,
+          if (dt > def.life || (def.id === "boomerang" && dt > 0.4)) break;
+          const gravity = def.gravity;
+          const inheritance = def.attack === "mine" ? 0.3 : 0.35;
+          const x = active.x + ((dx / len) * speed + active.vx * inheritance) * dt,
             y =
               active.y +
-              ((dy / len) * speed + active.vy * 0.25) * dt +
+              ((dy / len) * speed + (def.attack === "mine" ? -65 : active.vy * inheritance)) * dt +
               0.5 * gravity * dt * dt;
           if (
             s.platforms.some(
@@ -554,23 +586,91 @@ export function renderGame(
     );
   }
   for (const p of s.projectiles) {
+    const def = WEAPON_CATALOG[p.kind];
+    const speed = Math.hypot(p.vx, p.vy);
+    if (speed > 300) line(c, [p.x, p.y, p.x - p.vx * 0.035, p.y - p.vy * 0.035], `${def.color}88`, p.kind === "meteor" ? 18 : 3);
     c.save();
     c.translate(p.x, p.y);
     c.rotate(Math.atan2(p.vy, p.vx));
-    if (p.kind === "rocket") {
+    if (p.kind === "rocket" || p.kind === "firework") {
       poly(c, [-10, -5, 6, -5, 13, 0, 6, 5, -10, 5], "#e27e4b");
       poly(c, [-10, -3, -24 - Math.sin(o.time * 60) * 8, 0, -10, 3], "#fbedb0");
+    } else if (p.kind === "sniper" || p.kind === "shotgun") {
+      rounded(c, -6, -2, 12, 4, 2, def.color);
+    } else if (p.kind === "anvil") {
+      c.rotate(-Math.atan2(p.vy, p.vx));
+      poly(c, [-20, -10, 20, -10, 12, -1, 5, -1, 5, 8, 14, 12, -14, 12, -5, 8, -5, -1, -13, -1], def.color);
+      line(c, [-18, -10, 18, -10], "#f4f6e4", 3);
+    } else if (p.kind === "banana" || p.kind === "boomerang") {
+      c.rotate((p.age ?? 0) * 10);
+      c.beginPath();
+      c.arc(0, 0, 12, -1, 1.8);
+      c.strokeStyle = def.color;
+      c.lineWidth = 6;
+      c.stroke();
     } else {
-      circle(c, 0, 0, 7, weaponColors[p.kind]);
-      circle(c, -2, -2, 2, "#fff2b5");
+      const size = p.variant === "fragment" ? 5 : p.kind === "meteor" ? 23 : p.kind === "megaBomb" ? 15 : 8;
+      circle(c, 0, 0, size + 1.5, ink);
+      circle(c, 0, 0, size, def.color);
+      circle(c, -size * 0.25, -size * 0.3, size * 0.28, "#fff2b5");
+      if (p.kind === "megaBomb" || p.kind === "disco") {
+        line(c, [-size * 0.6, -size * 0.5, size * 0.6, size * 0.5], ink, 2);
+        line(c, [-size * 0.6, size * 0.5, size * 0.6, -size * 0.5], ink, 2);
+      }
+      if (def.contact !== "explode" && !p.variant) {
+        line(c, [0, -size, 4, -size - 5, 7, -size - 3], ink, 2);
+        circle(c, 7, -size - 3, 2.5, Math.sin(o.time * 30) > 0 ? "#fff3ae" : "#ff714a");
+      }
     }
     c.restore();
   }
   for (const e of s.explosions) {
     const progress = e.age / 0.55;
+    const color = e.color ?? "#f3cf7d";
     c.globalAlpha = Math.max(0, 1 - progress);
-    circle(c, e.x, e.y, e.radius * (0.4 + progress * 0.6), "#f3cf7d");
-    circle(c, e.x, e.y, e.radius * (0.2 + progress * 0.35), "#fff2cb");
+    if (e.kind === "melee") {
+      c.beginPath();
+      c.arc(e.x, e.y, e.radius * (0.5 + progress * 0.4), (e.direction ?? 0) - 1.2, (e.direction ?? 0) + 1.2);
+      c.strokeStyle = color;
+      c.lineWidth = 14 * (1 - progress);
+      c.stroke();
+      c.save();
+      c.translate(e.x, e.y);
+      c.rotate((e.direction ?? 0) - 0.8 + progress * 2.1);
+      if (e.weapon === "golf") {
+        line(c, [-30, 16, 21, -13], "#d7e4d2", 4);
+        line(c, [-30, 16, -16, 8], ink, 6);
+        rounded(c, 18, -19, 18, 9, 3, "#dae2df", ink);
+      } else if (e.weapon === "bat") {
+        rounded(c, -30, -4, 60, 8, 4, "#ae784c", ink);
+        rounded(c, -2, -8, 40, 16, 7, "#e0b875", ink);
+      } else {
+        rounded(c, -21, -9, 22, 18, 4, "#f3c99b", ink);
+        rounded(c, -4, -17, 30, 31, 10, "#ed7067", ink);
+        circle(c, 0, 13, 8, "#ed7067");
+      }
+      c.restore();
+      c.textAlign = "center";
+      text(c, "WHACK!", e.x, e.y - 32 - progress * 20, 18, "#fff5cd", 900);
+      c.textAlign = "left";
+    } else if (e.kind === "pull" || e.kind === "push" || e.kind === "spring") {
+      for (let ring = 0; ring < 3; ring++) {
+        const wave = (progress + ring / 3) % 1;
+        c.beginPath();
+        c.arc(e.x, e.y, e.radius * (e.kind === "pull" ? 1 - wave : wave), 0, Math.PI * 2);
+        c.strokeStyle = color;
+        c.lineWidth = 4 * (1 - wave);
+        c.stroke();
+      }
+    } else {
+      circle(c, e.x, e.y, e.radius * (0.4 + progress * 0.6), color);
+      circle(c, e.x, e.y, e.radius * (0.2 + progress * 0.35), "#fff2cb");
+      c.beginPath();
+      c.arc(e.x, e.y, e.radius * (0.3 + progress * 1.5), 0, Math.PI * 2);
+      c.strokeStyle = "#fff1bd";
+      c.lineWidth = 3 * (1 - progress);
+      c.stroke();
+    }
     for (let i = 0; i < 14; i++) {
       const a = i * 2.4;
       circle(
@@ -578,7 +678,7 @@ export function renderGame(
         e.x + Math.cos(a) * e.radius * progress * 1.6,
         e.y + Math.sin(a) * e.radius * progress * 1.6,
         4 * (1 - progress),
-        "#eaa264",
+        color,
       );
     }
     c.globalAlpha = 1;

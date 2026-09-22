@@ -1,0 +1,272 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { FIXED_STEP, GameEngine } from "../shared/game";
+import { ClientPrediction, interpolateStates } from "../src/prediction";
+import { MAX_PENDING_FRAMES, NETWORK_STEP, type InputFrame, type ServerState } from "../shared/protocol";
+import type { PlayerInput } from "../shared/types";
+
+const input: PlayerInput = { left: false, right: false, up: false, down: false, aimX: 600, aimY: 1000 };
+
+function snapshot(game: GameEngine, ack = 0, epoch = "match-1"): ServerState {
+  const { state, simulation } = game.capture();
+  return { ...state, net: { epoch, ack, tick: Math.round(simulation.elapsed / FIXED_STEP), simulation } };
+}
+
+function applyFrame(game: GameEngine, frame: InputFrame): void {
+  game.setInput(frame.playerId, frame.input);
+  for (const command of frame.commands) game.command(frame.playerId, command);
+  game.step(NETWORK_STEP);
+}
+
+test("checkpoints restore fixed-step remainder, jump timing, random generator and entity IDs without aliases", () => {
+  const original = new GameEngine({ mode: "practice", seed: 991 });
+  original.setInput("p1", { ...input, right: true });
+  original.command("p1", { type: "jump" });
+  original.step(FIXED_STEP * 5.5);
+  const saved = original.capture();
+  const restored = new GameEngine({ seed: 88 });
+  restored.restore(saved);
+  saved.state.players[0].hp = 1;
+  saved.simulation.inputs[0][1].aimX = -123;
+  assert.equal(restored.state.players[0].hp, 100);
+  for (const game of [original, restored]) {
+    assert.equal(game.command("p1", { type: "backflip" }), true);
+    for (let i = 0; i < 150; i++) game.step(NETWORK_STEP);
+    game.command(game.state.activePlayerId, { type: "endTurn" });
+    for (let i = 0; i < 700; i++) game.step(NETWORK_STEP);
+  }
+  assert.deepEqual(restored.capture(), original.capture());
+});
+
+test("the active frog moves and jumps before server acknowledgement", () => {
+  const server = new GameEngine({ mode: "practice" });
+  const sent: InputFrame[] = [];
+  const client = new ClientPrediction((frame) => sent.push(frame));
+  client.receive(snapshot(server), "p1", 0);
+  client.input({ ...input, right: true });
+  client.command({ type: "jump" });
+  const shown = client.advance(NETWORK_STEP, 17)!;
+  assert.equal(client.isPredicting, true);
+  assert.equal(client.pendingCount, 1);
+  assert.ok(shown.players[0].x > server.state.players[0].x);
+  assert.ok(shown.players[0].y < server.state.players[0].y);
+  assert.equal(server.state.players[0].grounded, true, "prediction cannot mutate authority");
+  assert.equal(sent[0].seq, 1);
+  assert.deepEqual(sent[0].commands, [{ type: "jump" }]);
+  assert.equal("dt" in sent[0], false, "the client never asks the server to advance time");
+});
+
+test("acknowledged actions are removed and unacknowledged actions replay exactly once", () => {
+  const server = new GameEngine({ mode: "practice", seed: 31 });
+  const sent: InputFrame[] = [];
+  const client = new ClientPrediction((frame) => sent.push(frame));
+  client.receive(snapshot(server), "p1", 0);
+  client.input({ ...input, right: true });
+  for (let i = 0; i < 6; i++) {
+    if (i === 3) client.command({ type: "jump" });
+    client.advance(NETWORK_STEP, (i + 1) * 1000 / 60);
+  }
+  sent.slice(0, 3).forEach((frame) => applyFrame(server, frame));
+  client.receive(snapshot(server, 3), "p1", 101);
+  assert.equal(client.pendingCount, 3);
+  sent.slice(3, 6).forEach((frame) => applyFrame(server, frame));
+  const shown = client.advance(0, 101)!;
+  assert.deepEqual(shown.players, server.state.players);
+  client.receive(snapshot(server, 6), "p1", 102);
+  assert.equal(client.pendingCount, 0);
+  assert.deepEqual(client.advance(0, 102)!.players, server.state.players);
+});
+
+test("correction restores server health and inventory immediately while smoothing only the drawing pose", () => {
+  const server = new GameEngine({ mode: "practice" });
+  const sent: InputFrame[] = [];
+  const client = new ClientPrediction((frame) => sent.push(frame));
+  client.receive(snapshot(server), "p1", 0);
+  client.input({ ...input, right: true });
+  const before = client.advance(NETWORK_STEP, 17)!;
+  applyFrame(server, sent[0]);
+  server.state.players[0].x += 50;
+  server.state.players[0].hp = 73;
+  server.state.players[0].inventory.rocket = 3;
+  client.receive(snapshot(server, 1), "p1", 20);
+  const corrected = client.advance(0, 20)!;
+  assert.equal(corrected.players[0].hp, 73);
+  assert.equal(corrected.players[0].inventory.rocket, 3);
+  assert.ok(Math.abs(corrected.players[0].x - before.players[0].x) < 1e-9);
+  client.input(input);
+  for (let i = 0; i < 20; i++) client.advance(NETWORK_STEP, 40 + i * 17);
+  assert.ok(client.advance(0, 400)!.players[0].x > before.players[0].x + 45);
+});
+
+test("spectators interpolate trajectories, angular attitude, rope length, mines and projectile fuses", () => {
+  const game = new GameEngine();
+  const a = structuredClone(game.state);
+  a.players[0].rotation = Math.PI - 0.1;
+  a.players[0].rope = { x: 200, y: 100, length: 150, bends: [{ x: 201, y: 120 }] };
+  a.projectiles = [{ id: "shot", ownerId: "p1", kind: "grenade", x: 100, y: 100, vx: 50, vy: -10, life: 2, age: 1, radius: 5, damage: 20 }];
+  a.mines = [{ id: "mine", ownerId: "p1", kind: "mine", x: 100, y: 200, vx: 0, vy: 5, placedTurn: 1, fuse: 0.5, settled: false }];
+  const b = structuredClone(a);
+  b.players[0].x += 20;
+  b.players[0].rotation = -Math.PI + 0.1;
+  b.players[0].angularVelocity = 4;
+  b.players[0].impact = 0.8;
+  b.players[0].rope!.length = 250;
+  b.projectiles[0].x = 120;
+  b.projectiles[0].life = 1.8;
+  b.projectiles[0].age = 1.2;
+  b.mines[0].y = 220;
+  b.mines[0].fuse = 0.3;
+  const halfway = interpolateStates(a, b, 0.5);
+  assert.equal(halfway.players[0].x, a.players[0].x + 10);
+  assert.ok(Math.abs(halfway.players[0].rotation - Math.PI) < 1e-9);
+  assert.equal(halfway.players[0].angularVelocity, 2);
+  assert.equal(halfway.players[0].impact, 0.4);
+  assert.equal(halfway.players[0].rope!.length, 200);
+  assert.equal(halfway.projectiles[0].x, 110);
+  assert.equal(halfway.projectiles[0].life, 1.9);
+  assert.equal(halfway.projectiles[0].age, 1.1);
+  assert.equal(halfway.mines[0].y, 210);
+  assert.equal(halfway.mines[0].fuse, 0.4);
+  assert.equal(a.players[0].rope!.length, 150, "presentation never edits a buffered state");
+});
+
+test("watchers never run prediction or extrapolate across an interrupted snapshot stream", () => {
+  const server = new GameEngine({ mode: "practice" });
+  const sent: InputFrame[] = [];
+  const client = new ClientPrediction((frame) => sent.push(frame));
+  client.receive(snapshot(server), "p2", 0);
+  server.setInput("p1", { ...input, right: true });
+  for (let i = 1; i <= 6; i++) {
+    server.step(0.05);
+    client.receive(snapshot(server), "p2", i * 50);
+    client.advance(0.05, i * 50);
+  }
+  const bufferedX = client.advance(0, 300)!.players[0].x;
+  assert.ok(bufferedX < server.state.players[0].x);
+  client.input({ ...input, right: true });
+  client.command({ type: "jump" });
+  for (let i = 1; i <= 100; i++) client.advance(0.05, 300 + i * 50);
+  assert.equal(client.isPredicting, false);
+  assert.equal(client.canControl, false);
+  assert.equal(sent.length, 0);
+  assert.equal(client.advance(0, 5300)!.players[0].x, server.state.players[0].x);
+});
+
+test("out-of-order states, turn switches, reconnects and restarts cannot replay stale commands", () => {
+  const server = new GameEngine({ mode: "practice" });
+  const sent: InputFrame[] = [];
+  const client = new ClientPrediction((frame) => sent.push(frame));
+  const old = snapshot(server);
+  client.receive(old, "p1", 0);
+  client.command({ type: "jump" });
+  client.advance(NETWORK_STEP, 17);
+  server.step(0.1);
+  server.state.players[0].hp = 60;
+  client.receive(snapshot(server, 1), "p1", 100);
+  client.receive(old, "p1", 110);
+  assert.equal(client.advance(0, 110)!.players[0].hp, 60);
+  client.command({ type: "endTurn" });
+  server.state.turn++;
+  server.state.activeTeamId = server.state.activePlayerId = "p2";
+  client.receive(snapshot(server), "p1", 120);
+  assert.equal(client.pendingCount, 0);
+  assert.equal(client.canControl, false);
+  assert.equal(client.isPredicting, false);
+  client.advance(NETWORK_STEP, 140);
+  assert.equal(sent.length, 1);
+  client.reset();
+  client.receive(snapshot(new GameEngine({ mode: "practice" }), 42, "new-match"), "p1", 200);
+  client.advance(NETWORK_STEP, 220);
+  assert.equal(sent.at(-1)!.seq, 43);
+  assert.equal(sent.at(-1)!.commands.length, 0);
+  assert.equal(sent.at(-1)!.input.right, false);
+  assert.equal(sent.at(-1)!.epoch, "new-match");
+});
+
+test("input history stays bounded when acknowledgements stop", () => {
+  const sent: InputFrame[] = [];
+  const client = new ClientPrediction((frame) => sent.push(frame));
+  client.receive(snapshot(new GameEngine({ mode: "practice" })), "p1", 0);
+  for (let i = 0; i < 500; i++) client.advance(NETWORK_STEP, i * 17);
+  assert.equal(client.pendingCount, MAX_PENDING_FRAMES);
+  assert.equal(sent.length, MAX_PENDING_FRAMES);
+});
+
+test("latency and ordered jitter preserve one shot, authoritative damage and eventual acknowledgement", () => {
+  const server = new GameEngine({ mode: "practice", seed: 431 });
+  server.state.platforms = [{ id: "floor", x: 0, y: 1600, w: 4320, h: 200 }];
+  server.state.crates = [];
+  server.state.players[0].x = 500;
+  server.state.players[1].x = 640;
+  const up: { due: number; frame: InputFrame }[] = [];
+  const down: { due: number; state: ServerState }[] = [];
+  let tick = 0, lastUp = 0, lastDown = 0, ack = 0, shots = 0;
+  const client = new ClientPrediction((frame) => {
+    // WebSockets preserve ordering; delivery can still bunch after jitter.
+    lastUp = Math.max(lastUp, tick + 4 + frame.seq % 4);
+    up.push({ due: lastUp, frame });
+  });
+  client.receive(snapshot(server), "p1", 0);
+  let immediateX = 0;
+  for (tick = 1; tick <= 480; tick++) {
+    client.input({ ...input, right: tick <= 10, aimX: 1000, aimY: 1582 });
+    if (tick === 20) {
+      client.command({ type: "selectWeapon", weapon: "pulse" });
+      client.command({ type: "fire", power: 1 });
+    }
+    if (tick === 120) client.command({ type: "jump" });
+    const shown = client.advance(NETWORK_STEP, tick * 1000 / 60)!;
+    if (tick === 1) immediateX = shown.players[0].x;
+    while (up[0]?.due <= tick) {
+      const frame = up.shift()!.frame;
+      server.setInput(frame.playerId, frame.input);
+      for (const command of frame.commands) {
+        if (command.type === "fire") shots++;
+        server.command(frame.playerId, command);
+      }
+      ack = frame.seq;
+    }
+    server.step(NETWORK_STEP);
+    if (tick % 3 === 0) {
+      lastDown = Math.max(lastDown, tick + 3 + tick % 5);
+      down.push({ due: lastDown, state: snapshot(server, ack) });
+    }
+    while (down[0]?.due <= tick) client.receive(down.shift()!.state, "p1", tick * 1000 / 60);
+    assert.ok(shown.players.every((player) => Number.isFinite(player.x) && Number.isFinite(player.rotation)));
+  }
+  assert.ok(immediateX > 500, "response occurs before the 66–116ms uplink");
+  assert.equal(shots, 1, "correction replay never resends a firing command");
+  assert.equal(server.state.players[0].inventory.pulse, 8);
+  assert.ok(server.state.players[1].hp < 100, "the server adjudicates the impact");
+  for (const { frame } of up) {
+    server.setInput(frame.playerId, frame.input);
+    for (const command of frame.commands) server.command(frame.playerId, command);
+    ack = frame.seq;
+  }
+  client.receive(snapshot(server, ack), "p1", 8100);
+  const final = client.advance(0, 8100)!;
+  assert.equal(client.pendingCount, 0);
+  assert.deepEqual(final.players.map((player) => [player.hp, player.inventory, player.alive]),
+    server.state.players.map((player) => [player.hp, player.inventory, player.alive]));
+  assert.deepEqual(final.projectiles, server.state.projectiles);
+});
+
+test("mid-flight checkpoint replay reproduces seeded cluster bomblets and explosion damage", () => {
+  const first = new GameEngine({ mode: "practice", seed: 911 });
+  first.setInput("p1", { ...input, aimX: 1000, aimY: 1000 });
+  first.command("p1", { type: "selectWeapon", weapon: "cluster" });
+  first.command("p1", { type: "fire", power: 0.8 });
+  for (let i = 0; i < 60; i++) first.step(NETWORK_STEP);
+  assert.ok(first.state.projectiles.length > 0);
+  const resumed = new GameEngine();
+  resumed.restore(first.capture());
+  let sawBomblets = false;
+  for (let i = 0; i < 300; i++) {
+    first.step(NETWORK_STEP);
+    resumed.step(NETWORK_STEP);
+    sawBomblets ||= first.state.projectiles.some((shot) => shot.variant === "fragment");
+    assert.deepEqual(resumed.state, first.state);
+  }
+  assert.equal(sawBomblets, true);
+  assert.deepEqual(resumed.capture(), first.capture());
+});

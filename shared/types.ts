@@ -1,4 +1,8 @@
-export type WeaponId = "rocket" | "grenade" | "pulse";
+export type WeaponId =
+  | "rocket" | "grenade" | "pulse" | "megaBomb" | "cluster" | "banana"
+  | "bouncer" | "sticky" | "mine" | "springMine" | "golf" | "bat" | "boxing"
+  | "airstrike" | "meteor" | "shotgun" | "sniper" | "mortar" | "firework"
+  | "anvil" | "vacuum" | "gust" | "disco" | "boomerang";
 export type GameMode = "practice" | "versus";
 export type GamePhase = "playing" | "retreat" | "settling" | "waiting" | "finished";
 
@@ -59,6 +63,9 @@ export interface Player {
   lookAt: Point;
   rope: Rope | null;
   rotation: number;
+  angularVelocity: number;
+  /** Recent collision intensity for cosmetic squash, flashes and leg reactions. */
+  impact: number;
   tumble: number;
   inventory: Record<WeaponId, number>;
   weapon: WeaponId | null;
@@ -83,6 +90,24 @@ export interface Projectile {
   life: number;
   radius: number;
   damage: number;
+  variant?: "fragment" | "strike";
+  age?: number;
+  stuck?: boolean;
+  attachedPlayerId?: string;
+  bounces?: number;
+}
+
+export interface Mine {
+  id: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  kind: "mine" | "springMine";
+  placedTurn: number;
+  fuse: number | null;
+  settled: boolean;
 }
 
 export interface Explosion {
@@ -91,6 +116,10 @@ export interface Explosion {
   y: number;
   radius: number;
   age: number;
+  weapon?: WeaponId;
+  kind?: "blast" | "push" | "pull" | "spring" | "melee";
+  color?: string;
+  direction?: number;
 }
 
 export interface GameState {
@@ -102,6 +131,7 @@ export interface GameState {
   teams: Team[];
   crates: Crate[];
   projectiles: Projectile[];
+  mines: Mine[];
   explosions: Explosion[];
   activePlayerId: string;
   activeTeamId: string;

@@ -11,6 +11,7 @@ import {
   SPAWNS,
 } from "../shared/game.js";
 import type { PlayerInput } from "../shared/types.js";
+import { createInventory, WEAPON_CATALOG } from "../shared/weapons.js";
 
 const input = (overrides: Partial<PlayerInput> = {}): PlayerInput => ({
   left: false,
@@ -30,7 +31,7 @@ function walkToFirstCrate(game: GameEngine): void {
     (candidate) => candidate.id === game.state.activePlayerId,
   )!;
   const crate = game.state.crates[0]!;
-  for (let frame = 0; frame < 360 && !player.hasCrate; frame++) {
+  for (let frame = 0; frame < 360 && game.state.crates.some((c) => c.id === crate.id); frame++) {
     game.setInput(
       player.id,
       input({ left: crate.x < player.x, right: crate.x > player.x }),
@@ -39,29 +40,27 @@ function walkToFirstCrate(game: GameEngine): void {
   }
   game.setInput(player.id, input());
   assert.equal(
-    player.hasCrate,
-    true,
+    game.state.crates.some((c) => c.id === crate.id),
+    false,
     "the fresh supply crate is reachable by walking",
   );
 }
 
-test("a crate is required to attack, and one pickup permits exactly one shot", () => {
+test("every frog starts with the arsenal, while each turn still permits exactly one shot", () => {
   const game = new GameEngine();
-  assert.equal(game.command("p1", { type: "fire" }), false);
-  assert.equal(game.state.projectiles.length, 0);
-  walkToFirstCrate(game);
-  assert.equal(game.state.players[0]!.weapon, "rocket");
+  assert.deepEqual(game.state.players[0]!.inventory, createInventory());
+  assert.equal(game.state.players[0]!.hasCrate, true);
   game.setInput("p1", input({ aimX: -1000, aimY: -1000 }));
   assert.equal(game.command("p1", { type: "fire" }), true);
   assert.equal(game.state.phase, "retreat");
   assert.equal(game.state.timeLeft, RETREAT_SECONDS);
-  assert.equal(game.state.players[0]!.weapon, null);
+  assert.equal(game.state.players[0]!.inventory.rocket, 2);
   assert.equal(game.command("p1", { type: "fire" }), false);
   advance(game, RETREAT_SECONDS + 3);
   assert.equal(game.state.activePlayerId, "p2");
   assert.equal(game.state.phase, "playing");
-  assert.equal(game.state.players[1]!.hasCrate, false);
-  assert.equal(game.command("p2", { type: "fire" }), false);
+  assert.equal(game.state.players[1]!.hasCrate, true);
+  assert.equal(game.command("p2", { type: "fire" }), true);
 });
 
 test("inactive and unknown players cannot move, jump, end turns, or attack", () => {
@@ -166,9 +165,10 @@ test("fast falling characters cannot tunnel through thin shelves", () => {
   player.vy = 1000;
   player.grounded = false;
   advance(game, 0.15);
-  assert.equal(player.y, 1400 - PLAYER_RADIUS);
-  assert.equal(player.vy, 0);
-  assert.equal(player.grounded, true);
+  assert.ok(player.y < 1400 - PLAYER_RADIUS, "the thin shelf rebounds the fall without tunneling");
+  assert.ok(player.vy < 0, "a hard landing bounces upward");
+  assert.ok(player.hp < 100, "fall damage follows the impact speed");
+  assert.equal(player.grounded, false);
 });
 
 test("water eliminates a player and resolves the winner", () => {
@@ -315,11 +315,12 @@ test("pulse is a short-range directional blast that spares its owner", () => {
 test("the turn deadline switches players and preserves unused ammunition", () => {
   const game = new GameEngine();
   walkToFirstCrate(game);
+  const rocketAmmo = game.state.players[0]!.inventory.rocket;
   game.state.timeLeft = 0.01;
   advance(game, 1);
   assert.equal(game.state.activePlayerId, "p2");
   assert.equal(game.state.turn, 2);
-  assert.equal(game.state.players[0]!.inventory.rocket, 1);
+  assert.equal(game.state.players[0]!.inventory.rocket, rocketAmmo);
   assert.equal(game.state.players[0]!.weapon, "rocket");
   assert.equal(game.command("p2", { type: "endTurn" }), true);
   advance(game, 0.1);
@@ -331,7 +332,7 @@ test("the turn deadline switches players and preserves unused ammunition", () =>
     true,
     "saved ammo can be fired without finding another crate",
   );
-  assert.equal(game.state.players[0]!.inventory.rocket, 0);
+  assert.equal(game.state.players[0]!.inventory.rocket, rocketAmmo - 1);
 });
 
 test("skipping a turn preserves saved ammo and the selected weapon", () => {
@@ -339,6 +340,7 @@ test("skipping a turn preserves saved ammo and the selected weapon", () => {
   walkToFirstCrate(game);
   const player = game.state.players[0]!;
   player.inventory.grenade = 2;
+  const savedInventory = { ...player.inventory };
   assert.equal(
     game.command("p1", { type: "selectWeapon", weapon: "grenade" }),
     true,
@@ -349,60 +351,40 @@ test("skipping a turn preserves saved ammo and the selected weapon", () => {
   game.command("p2", { type: "endTurn" });
   advance(game, 0.1);
   assert.equal(game.state.activePlayerId, "p1");
-  assert.deepEqual(player.inventory, { rocket: 1, grenade: 2, pulse: 0 });
+  assert.deepEqual(player.inventory, savedInventory);
   assert.equal(player.weapon, "grenade");
   assert.equal(player.hasCrate, true);
 });
 
-test("crates add ammunition, selection spends only its weapon, and spare ammo cannot grant a second shot", () => {
+test("crates resupply ammo, selection spends one round, and spare ammo cannot grant a second shot", () => {
   const game = new GameEngine();
-  walkToFirstCrate(game);
   const player = game.state.players[0]!;
-  game.state.crates.push(
+  // Exercise an exhausted pack independently of the generous starting loadout.
+  for (const weapon of Object.keys(player.inventory) as (keyof typeof player.inventory)[]) player.inventory[weapon] = 0;
+  player.weapon = null;
+  player.hasCrate = false;
+  game.state.crates = [
     { id: "extra-rocket", x: player.x, y: player.y, weapon: "rocket" },
     { id: "extra-grenade", x: player.x, y: player.y, weapon: "grenade" },
-  );
+  ];
   game.step(FIXED_STEP);
-  assert.deepEqual(player.inventory, { rocket: 2, grenade: 1, pulse: 0 });
-  assert.equal(
-    player.weapon,
-    "rocket",
-    "collecting another type preserves the stocked selection",
-  );
-  assert.equal(
-    game.command("p1", { type: "selectWeapon", weapon: "pulse" }),
-    false,
-  );
-  assert.equal(
-    game.command("p1", { type: "selectWeapon", weapon: "grenade" }),
-    true,
-  );
+  assert.equal(player.inventory.rocket, WEAPON_CATALOG.rocket.ammo);
+  assert.equal(player.inventory.grenade, WEAPON_CATALOG.grenade.ammo);
+  assert.equal(player.weapon, "rocket");
+  assert.equal(game.command("p1", { type: "selectWeapon", weapon: "pulse" }), false);
+  assert.equal(game.command("p1", { type: "selectWeapon", weapon: "grenade" }), true);
+  player.inventory.grenade = 1;
   game.setInput("p1", input({ aimX: 600, aimY: 350 }));
   assert.equal(game.command("p1", { type: "fire" }), true);
-  assert.deepEqual(player.inventory, { rocket: 2, grenade: 0, pulse: 0 });
-  assert.equal(
-    player.weapon,
-    "rocket",
-    "an exhausted weapon falls back to stocked ammunition",
-  );
+  assert.equal(player.inventory.grenade, 0);
+  assert.equal(player.inventory.rocket, WEAPON_CATALOG.rocket.ammo);
+  assert.equal(player.weapon, "rocket", "exhausted weapons fall back to stocked ammunition");
   assert.equal(player.hasCrate, false);
   assert.equal(game.command("p1", { type: "fire" }), false);
-  assert.equal(
-    game.command("p1", { type: "selectWeapon", weapon: "rocket" }),
-    false,
-  );
-  game.state.crates.push({
-    id: "retreat-supply",
-    x: player.x,
-    y: player.y,
-    weapon: "rocket",
-  });
+  assert.equal(game.command("p1", { type: "selectWeapon", weapon: "rocket" }), false);
+  game.state.crates.push({ id: "retreat-supply", x: player.x, y: player.y, weapon: "rocket" });
   game.step(FIXED_STEP);
-  assert.equal(
-    player.inventory.rocket,
-    2,
-    "retreat cannot collect another crate and rearm",
-  );
+  assert.equal(player.inventory.rocket, WEAPON_CATALOG.rocket.ammo, "retreat cannot collect another crate and rearm");
 });
 
 test("a killing blast keeps simulating its airborne survivor and can produce a draw", () => {
@@ -458,7 +440,7 @@ test("a complete match progresses through reachable crates, attacks, turns, and 
           : { aimX: target.x, aimY: target.y },
       ),
     );
-    // All actual combat is exercised with the crate's awarded weapon.
+    // Stocked rockets keep this lifecycle independent of random supply contents.
     assert.equal(game.command(player.id, { type: "fire" }), true);
     attacks++;
     advance(game, RETREAT_SECONDS + 3);

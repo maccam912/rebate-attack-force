@@ -10,6 +10,8 @@ import type {
 import { renderGame } from "./renderer";
 import { followCamera, screenToWorld, type Camera } from "./camera";
 import { RoomConnection, savedSeat, type LobbyState } from "./network";
+import { WEAPONS, WEAPON_CATALOG } from "../shared/weapons";
+import type { ServerState } from "../shared/protocol";
 
 import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, validTeamSettings } from "../shared/settings";
 
@@ -28,12 +30,13 @@ app.innerHTML = `
   <div class="hud" id="hud" hidden><div><div class="turn-player" id="turn-player"></div><div class="turn-caption" id="turn-caption"></div></div><div class="timer" id="timer"></div></div>
   <div class="objective-toast" id="objective-toast"></div>
   <div class="charging-indicator" id="charging" hidden>SHOT POWER<div class="power-meter"><div id="power-fill"></div></div></div>
-  <div class="arena-bottom"><div class="toolbelt"><button class="tool-button active" id="grapple-tool"><span class="key">1</span> Grapple</button><button class="tool-button" id="weapon-tool"><span class="key">2</span> <span id="weapon-tool-label">Find a crate</span></button><div class="inventory" id="inventory"></div></div><button class="end-turn" id="end-turn">End turn</button></div>
+  <section class="arsenal-panel" id="arsenal-panel" aria-label="Weapon arsenal" hidden><div class="arsenal-heading"><div><div class="eyebrow">DEPARTMENT OF BAD IDEAS</div><h2>Pick your trouble.</h2></div><button class="icon-button" id="close-arsenal" aria-label="Close arsenal">×</button></div><p class="arsenal-intro">One attack per turn. Hold to charge; release to cause problems.</p><div class="inventory" id="inventory"></div><div class="arsenal-footer">Crates resupply your stash · Hard landings hurt · B to close</div></section>
+  <div class="arena-bottom"><div class="toolbelt"><button class="tool-button active" id="grapple-tool"><span class="key">1</span> Grapple</button><button class="tool-button" id="weapon-tool"><span class="key">2</span> <span id="weapon-tool-label">Weapon</span></button><button class="tool-button" id="arsenal-button" aria-expanded="false" aria-controls="arsenal-panel"><span class="key">B</span> Arsenal</button></div><button class="end-turn" id="end-turn">End turn</button></div>
   <div class="touch-controls" aria-label="Touch controls"><button data-hold="left" aria-label="Move left">←</button><button data-hold="right" aria-label="Move right">→</button><button id="touch-jump">Jump</button><button data-hold="up">Reel ↑</button><button data-hold="down" aria-label="Pay out rope">↓</button><button id="touch-hook">Hook</button></div>
   <div class="menu-backdrop" id="menu-overlay"><section class="panel menu-panel" aria-label="Game menu"><div class="menu-brand">${logo}<h1>REBATE <span>ATTACK FORCE</span></h1></div><button class="secondary-button" id="resume-button" hidden>Resume game <span>Esc</span></button><div id="play-panel"></div><div class="connection-status" id="connection-status">THE SCRAPYARD IS OPEN</div></section></div>
   <div class="match-over" id="match-over" hidden><div><div class="eyebrow">THE SCRAPYARD HAS SPOKEN</div><h2 id="winner-name"></h2><button class="primary-button" id="rematch-button">Run it back <span>↗</span></button></div></div>
 </main>
-<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Water is a one-way trip.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Touch crates to stock up on rockets, grenades, or close-range pulses. Choose a weapon in your stash, press 2, aim, hold to charge, then release.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, jump onto, or stomp them from above to send them rolling. Local mode shares a keyboard. Online mode gives you a private room link for 2–4 players. The host chooses each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice keeps you in control and respawns your target. These maps and frogs are original. Sound effects are CC0 by Kenney.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
+<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Hard impacts and long falls hurt. Water is a one-way trip.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Mines arm on later turns; approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares a keyboard. Online mode gives you a private room link for 2–4 players. The host chooses each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice keeps you in control and respawns your target. These maps and frogs are original. Sound effects are CC0 by Kenney.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -64,21 +67,22 @@ let pointer: { x: number; y: number } | null = null;
 let camera: Camera | null = null;
 let viewport = { width: innerWidth, height: innerHeight, dpr: 1 };
 let menuOpen = false;
+let arsenalOpen = false;
 const keys = new Set<string>();
 let chargingAt: number | null = null;
 let toastTimer = 0;
 let prevTime = performance.now(),
   accumulated = 0,
-  lastSend = 0,
   lastHud = 0;
 let soundsReady = false;
 let previousCrates = state.crates.length;
+let previousCrateIds = new Set(state.crates.map((crate) => crate.id));
+let revealedCrates = new Set<string>();
 let previousProjectiles = new Set<string>();
 let previousExplosions = new Set<string>();
 let previousTurn = state.turn;
 let previousRope = false;
 let previousSignature = "";
-const displayedPlayers = new Map<string, { x: number; y: number }>();
 const audio = new Map<string, HTMLAudioElement>();
 try {
   playerName = localStorage.getItem("raf-name") || "Sprout";
@@ -127,7 +131,7 @@ function canControl() {
     screen === "playing" &&
     !menuOpen && $("guide").hidden &&
     (state.phase === "playing" || state.phase === "retreat") &&
-    (!network || (network.isConnected && network.sessionId === state.activeTeamId))
+    (!network || network.canControl)
   );
 }
 function input(): PlayerInput {
@@ -171,6 +175,15 @@ function setTool(next: "grapple" | "weapon") {
     return;
   }
   tool = next;
+  updateHud(true);
+}
+function toggleArsenal(open = !arsenalOpen) {
+  clearInputs();
+  arsenalOpen = open && screen === "playing" && !menuOpen;
+  $("arsenal-panel").hidden = !arsenalOpen;
+  $("arsenal-button").setAttribute("aria-expanded", String(arsenalOpen));
+  if (arsenalOpen) $("close-arsenal").focus();
+  else canvas.focus();
   updateHud(true);
 }
 function clearInputs() {
@@ -285,6 +298,7 @@ $("inventory").onclick = (event) => {
   if (button && !button.disabled) {
     command({ type: "selectWeapon", weapon: button.dataset.weapon as WeaponId });
     tool = "weapon";
+    toggleArsenal(false);
     updateHud(true);
   }
 };
@@ -296,6 +310,7 @@ function syncMenu() {
 function toggleMenu() {
   if (screen !== "playing") return;
   clearInputs();
+  toggleArsenal(false);
   menuOpen = !menuOpen;
   syncMenu();
   updateHud(true);
@@ -309,6 +324,7 @@ function startLocal() {
   clearInputs();
   engine = new GameEngine({
     mode: selectedMode === "practice" ? "practice" : "versus",
+    seed: crypto.getRandomValues(new Uint32Array(1))[0],
     players: [
       { id: "p1", name: playerName, ...(selectedMode === "local" ? localTeams.p1 : {}) },
       {
@@ -326,10 +342,15 @@ function startLocal() {
   canvas.focus();
 }
 function resetObserved() {
+  arsenalOpen = false;
+  $("arsenal-panel").hidden = true;
+  $("arsenal-button").setAttribute("aria-expanded", "false");
   camera = null;
   pointer = null;
   aim = { x: (active()?.x ?? 220) + 200, y: (active()?.y ?? 1582) - 220 };
   previousCrates = state.crates.length;
+  previousCrateIds = new Set(state.crates.map((crate) => crate.id));
+  revealedCrates = new Set();
   previousProjectiles = new Set();
   previousExplosions = new Set();
   previousTurn = state.turn;
@@ -344,6 +365,7 @@ async function connectOnline(roomId?: string, rejoin = false) {
   }
   busy = true;
   renderPanel();
+  let matchEpoch: string | undefined;
   const connection = new RoomConnection({
     onLobby(next) {
       if (network !== connection) return;
@@ -355,7 +377,9 @@ async function connectOnline(roomId?: string, rejoin = false) {
     },
     onState(next) {
       if (network !== connection) return;
-      const changed = screen !== "playing";
+      const epoch = (next as ServerState).net?.epoch;
+      const changed = screen !== "playing" || (epoch !== undefined && epoch !== matchEpoch);
+      matchEpoch = epoch;
       state = next;
       screen = "playing";
       engine = null;
@@ -467,6 +491,7 @@ function updateHud(force = false) {
   $("weapon-tool-label").textContent = p?.hasCrate
     ? weaponName(p.weapon)
     : "Find a crate";
+  $("arsenal-panel").hidden = !running || !arsenalOpen || menuOpen;
   if (!running) {
     $("objective-toast").textContent = "";
     return;
@@ -518,26 +543,19 @@ function updateHud(force = false) {
       : state.phase === "retreat"
         ? "Special delivery."
         : "Crate required";
-    $("weapon-note").textContent = p.hasCrate
-      ? p.weapon === "rocket"
-        ? "A straight-flying classic. Explodes on impact."
-        : p.weapon === "grenade"
-          ? "A bouncy little present. A short fuse. Mind the blast."
-          : "A short-range blast. Get close, then send them flying."
+    $("weapon-note").textContent = p.hasCrate && p.weapon
+      ? WEAPON_CATALOG[p.weapon].description
       : state.phase === "retreat"
         ? "You’ve got a few seconds to make yourself scarce."
         : "Find a crate to get your hands on something irresponsible.";
     const inv = p.inventory;
-    const invSignature = `${p.id}:${p.weapon}:${inv.rocket}:${inv.grenade}:${inv.pulse}:${canControl()}:${state.phase}`;
+    const invSignature = `${p.id}:${p.weapon}:${WEAPONS.map((w) => inv[w.id]).join(":")}:${canControl()}:${state.phase}`;
     const inventory = $("inventory");
     if (inventory && inventory.dataset.signature !== invSignature) {
       inventory.dataset.signature = invSignature;
-      inventory.innerHTML = (["rocket", "grenade", "pulse"] as WeaponId[])
-        .map(
-          (w) =>
-            `<button class="ammo-slot ${p.weapon === w ? "selected" : ""}" data-weapon="${w}" title="${weaponName(w)} · ${inv[w]} saved" aria-label="Select ${weaponName(w)}, ${inv[w]} rounds" ${!canControl() || state.phase !== "playing" || inv[w] === 0 ? "disabled" : ""}><span>${w === "rocket" ? "↗" : w === "grenade" ? "●" : "ϟ"}</span><b>${inv[w]}</b></button>`,
-        )
-        .join("");
+      inventory.innerHTML = [...new Set(WEAPONS.map((w) => w.category))].map((category) =>
+        `<section class="arsenal-group"><h3>${category}</h3><div class="arsenal-grid">${WEAPONS.filter((w) => w.category === category).map((w) =>
+          `<button class="ammo-slot ${p.weapon === w.id ? "selected" : ""}" data-weapon="${w.id}" aria-pressed="${p.weapon === w.id}" title="${escapeHtml(w.description)}" aria-label="Select ${escapeHtml(w.name)}, ${inv[w.id]} rounds" ${!canControl() || state.phase !== "playing" || inv[w.id] <= 0 ? "disabled" : ""}><span class="weapon-icon" style="color:${w.color}">${w.icon}</span><span class="ammo-copy"><strong>${escapeHtml(w.name)}</strong><small>${escapeHtml(w.description)}</small></span><b class="ammo-count">${inv[w.id]}</b></button>`).join("")}</div></section>`).join("");
     }
   }
   if (state.phase === "finished") {
@@ -548,35 +566,32 @@ function updateHud(force = false) {
       !!network && lobby?.hostId !== network.sessionId;
   }
 }
-function weaponName(w: string | null | undefined) {
-  return w === "rocket"
-    ? "Scrap rocket"
-    : w === "grenade"
-      ? "Junk grenade"
-      : w === "pulse"
-        ? "Recoil popper"
-        : "Empty pockets";
+function weaponName(w: WeaponId | null | undefined) {
+  return w ? WEAPON_CATALOG[w].name : "Empty pockets";
 }
 function detectEvents() {
   if (screen !== "playing") return;
-  if (state.crates.length < previousCrates) {
+  const crateIds = new Set(state.crates.map((crate) => crate.id));
+  const pickups = [...previousCrateIds].filter((id) => !crateIds.has(id) && !revealedCrates.has(id));
+  if (state.turn === previousTurn && state.crates.length < previousCrates && pickups.length) {
+    pickups.forEach((id) => revealedCrates.add(id));
     playSound("pickup");
     announce(
       canControl()
-        ? "Package acquired. Press 2 to make your delivery."
+        ? state.message
         : `${active()?.name ?? "A frog"} collected supplies.`,
     );
   }
   previousCrates = state.crates.length;
+  previousCrateIds = crateIds;
   for (const p of state.projectiles)
-    if (!previousProjectiles.has(p.id)) playSound("shot");
-  previousProjectiles = new Set(state.projectiles.map((p) => p.id));
+    if (!previousProjectiles.has(p.id)) { playSound("shot"); previousProjectiles.add(p.id); }
   for (const e of state.explosions)
-    if (!previousExplosions.has(e.id)) playSound("explosion");
-  previousExplosions = new Set(state.explosions.map((e) => e.id));
+    if (!previousExplosions.has(e.id)) { playSound("explosion"); previousExplosions.add(e.id); }
   if (active()?.rope && !previousRope) playSound("grapple");
   previousRope = !!active()?.rope;
   if (state.turn !== previousTurn) {
+    toggleArsenal(false);
     clearInputs();
     tool = "grapple";
     previousTurn = state.turn;
@@ -647,11 +662,16 @@ window.addEventListener("keydown", (e) => {
   )
     e.preventDefault();
   if (key === "escape") {
+    if (arsenalOpen) { toggleArsenal(false); return; }
     toggleMenu();
     return;
   }
   if (key === "f") {
     void fullscreen();
+    return;
+  }
+  if (key === "b" && screen === "playing" && !menuOpen && !e.repeat) {
+    toggleArsenal();
     return;
   }
   if (e.repeat) return;
@@ -698,6 +718,8 @@ $("touch-jump").onclick = enterJump;
 $("touch-hook").onclick = hook;
 $("grapple-tool").onclick = () => setTool("grapple");
 $("weapon-tool").onclick = () => setTool("weapon");
+$("arsenal-button").onclick = () => toggleArsenal();
+$("close-arsenal").onclick = () => toggleArsenal(false);
 $("end-turn").onclick = () => command({ type: "endTurn" });
 $("reset-button").onclick = restart;
 $("rematch-button").onclick = restart;
@@ -757,30 +779,14 @@ function frame(now: number) {
     syncInput();
     engine.step(dt);
     state = engine.state;
-  } else if (network && screen === "playing" && now - lastSend >= 50) {
+  } else if (network && screen === "playing") {
     syncInput();
-    lastSend = now;
+    state = network.frame(dt, now) ?? state;
   }
   const power =
     chargingAt === null ? 0.65 : Math.min(1, 0.25 + (now - chargingAt) / 1100);
   if (chargingAt !== null) $("power-fill").style.width = `${power * 100}%`;
-  let renderedState = state;
-  if (network && screen === "playing") {
-    renderedState = {
-      ...state,
-      players: state.players.map((p) => {
-        const shown = displayedPlayers.get(p.id) || { x: p.x, y: p.y };
-        const blend =
-          Math.hypot(p.x - shown.x, p.y - shown.y) > 200
-            ? 1
-            : 1 - Math.exp(-dt * 32);
-        shown.x += (p.x - shown.x) * blend;
-        shown.y += (p.y - shown.y) * blend;
-        displayedPlayers.set(p.id, shown);
-        return { ...p, x: shown.x, y: shown.y };
-      }),
-    };
-  } else displayedPlayers.clear();
+  const renderedState = state;
   camera = followCamera(camera, renderedState, viewport.width, viewport.height, dt);
   refreshAim();
   const canAim = canControl();

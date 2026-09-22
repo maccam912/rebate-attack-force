@@ -60,6 +60,16 @@ try {
   assert.equal(s.screen, "playing");
   await assertViewport(local);
   assert.equal(await local.locator("#menu-overlay").isVisible(), false);
+  await local.keyboard.press("b");
+  assert.equal(await local.locator("#arsenal-panel").isVisible(), true);
+  assert.equal(await local.locator("#inventory [data-weapon]").count(), 24);
+  assert.equal(await local.locator(".arsenal-group").count(), 6);
+  await local.screenshot({ path: "test-results/09-arsenal.png", fullPage: true });
+  await local.click('[data-weapon="golf"]');
+  assert.equal((await snapshot(local)).players[0].weapon, "golf");
+  assert.equal((await snapshot(local)).tool, "weapon");
+  assert.equal(await local.locator("#arsenal-panel").isVisible(), false);
+  await local.click("#reset-button");
   await local.keyboard.press("Enter");
   await local.waitForTimeout(90);
   s = await snapshot(local);
@@ -184,6 +194,7 @@ try {
     saved,
     "Unused ammo must survive hot-seat turns",
   );
+  await local.click("#arsenal-button");
   await local.click(`[data-weapon="${savedWeapon}"]`);
   assert.equal((await snapshot(local)).tool, "weapon");
   console.log(
@@ -354,6 +365,11 @@ try {
   await assertViewport(mobile);
   assert.equal(await mobile.locator(".touch-controls").isVisible(), true);
   await mobile.screenshot({ path: "test-results/07-mobile-game.png", fullPage: true });
+  await mobile.click("#arsenal-button");
+  assert.equal(await mobile.locator("#arsenal-panel").isVisible(), true);
+  await mobile.screenshot({ path: "test-results/10-mobile-arsenal.png", fullPage: true });
+  await mobile.locator('[data-weapon="mine"]').click();
+  assert.equal((await snapshot(mobile)).players[0].weapon, "mine");
   await mobile.setViewportSize({ width: 844, height: 390 });
   await mobile.waitForTimeout(100);
   await assertViewport(mobile);

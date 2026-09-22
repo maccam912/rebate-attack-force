@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { GameEngine } from "../shared/game.js";
-import { frogPose, solveLeg } from "../src/frog.js";
+import { FrogAnimator, frogPose, solveLeg } from "../src/frog.js";
 
 test("two-bone frog legs keep their lengths for reachable, distant, and coincident targets", () => {
   const hip = { x: 13, y: 4 };
@@ -81,4 +81,25 @@ test("nearby teammates do not trigger the alarmed face", () => {
   const [first, teammate] = players;
   assert.ok(Math.hypot(first.x - teammate.x, first.y - teammate.y) < 160);
   assert.equal(frogPose(first, players).alarmed, false);
+});
+
+test("diving feet trail above the frog and cosmetic springs preserve leg length without mutating physics", () => {
+  const player = new GameEngine().state.players[0];
+  player.grounded = false;
+  player.vy = 900;
+  player.vx = 250;
+  player.rotation = 0.7;
+  const snapshot = JSON.stringify(player);
+  const animator = new FrogAnimator();
+  for (let frame = 0; frame < 30; frame++) {
+    const pose = animator.pose(player, [], undefined, frame / 60);
+    for (const leg of pose.legs) {
+      assert.ok(Math.abs(Math.hypot(leg.knee.x - leg.hip.x, leg.knee.y - leg.hip.y) - 17) < 1e-8);
+      assert.ok(Math.abs(Math.hypot(leg.foot.x - leg.knee.x, leg.foot.y - leg.knee.y) - 16) < 1e-8);
+      const worldY = leg.foot.x * Math.sin(pose.rotation) + leg.foot.y * Math.cos(pose.rotation);
+      assert.ok(worldY < 0, "fast falling legs trail upward");
+    }
+    assert.equal(pose.alarmed, true);
+  }
+  assert.equal(JSON.stringify(player), snapshot);
 });

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Client, type Room } from "@colyseus/sdk";
 import { matchMaker } from "@colyseus/core";
 import { createGameServer } from "../server/index";
-import type { GameState } from "../shared/types";
+import type { ServerState } from "../shared/protocol";
 import type { LobbyState } from "../src/network";
 
 const server = createGameServer();
@@ -12,7 +12,7 @@ let endpoint = "";
 type Observed = {
   room: Room;
   lobby?: LobbyState;
-  state?: GameState;
+  state?: ServerState;
   notices: string[];
   snapshots: number;
 };
@@ -46,7 +46,7 @@ function observe(room: Room): Observed {
   room.onMessage<LobbyState>("lobby", (lobby) => {
     observed.lobby = lobby;
   });
-  room.onMessage<GameState>("state", (state) => {
+  room.onMessage<ServerState>("state", (state) => {
     observed.state = state;
     observed.snapshots++;
   });
@@ -129,7 +129,7 @@ test(
       sessionId: a.room.sessionId,
     });
     b.room.send("command", { type: "endTurn", sessionId: a.room.sessionId });
-    a.room.send("command", { type: "fire", power: 1 });
+    a.room.send("command", { type: "fire", power: NaN });
     const snapshots = a.snapshots;
     await waitFor(
       () => a.snapshots >= snapshots + 3,
@@ -140,7 +140,7 @@ test(
     assert.equal(
       a.state!.projectiles.length,
       0,
-      "cannot fire without collecting a crate",
+      "malformed fire commands cannot launch projectiles",
     );
     assert.equal(
       a.state!.players.find((player) => player.id === b.room.sessionId)!.x,
@@ -148,6 +148,7 @@ test(
     );
 
     const hostX = a.state!.players[0].x;
+    const nearbyCrateId = a.state!.crates[0].id;
     a.room.send("input", {
       left: false,
       right: true,
@@ -161,9 +162,10 @@ test(
       "server simulates active movement",
     );
     await waitFor(
-      () => a.state!.players[0].inventory.rocket > 0,
-      "server collects the nearby rocket crate",
+      () => !a.state!.crates.some((crate) => crate.id === nearbyCrateId),
+      "server collects the nearby supply crate",
     );
+    const carriedRockets = a.state!.players[0].inventory.rocket;
     a.room.send("input", {
       left: false,
       right: false,
@@ -206,7 +208,7 @@ test(
     );
     assert.equal(
       a.state!.players[0].inventory.rocket,
-      1,
+      carriedRockets,
       "unused ammunition carries into the next turn",
     );
     a.room.send("input", {
@@ -223,7 +225,7 @@ test(
       () => a.state!.phase === "retreat",
       "carried ammunition can fire without a new crate",
     );
-    assert.equal(a.state!.players[0].inventory.rocket, 0);
+    assert.equal(a.state!.players[0].inventory.rocket, carriedRockets - 1);
 
     c.room.send("restart");
     await waitFor(() => c.notices.length === 1, "non-host restart rejection");
@@ -363,4 +365,76 @@ test("host configures teams; rejoining from a fresh client restores the same tea
   assert.equal(visitorBack.state!.winnerId, visitorId);
   assert.equal(visitorBack.state!.players.filter((p) => p.teamId === hostId && p.alive).length, 0);
   await visitorBack.room.leave();
+});
+
+test("sequenced prediction frames acknowledge once and reject stale, forged and accelerated actions", { timeout: 10000 }, async () => {
+  const a = await create("Predictor");
+  const b = await join(a.room.roomId, "Observer");
+  await waitFor(() => a.lobby?.players.length === 2, "prediction lobby");
+  a.room.send("start");
+  await waitFor(() => !!a.state?.net && !!b.state?.net, "checkpoint snapshots");
+  const initial = a.state!;
+  const frame = {
+    seq: 1, epoch: initial.net!.epoch, turn: initial.turn,
+    playerId: initial.activePlayerId,
+    input: { left: false, right: false, up: false, down: false, aimX: 700, aimY: 1100 },
+    commands: [],
+  };
+  a.room.send("input", frame);
+  await waitFor(() => a.state!.net!.ack === 1 && b.state!.net!.ack === 1, "accepted sequence acknowledged to both views");
+  assert.equal(a.state!.players[0].lookAt.x, 700);
+  const checkpoint = a.state!.net!.simulation;
+  assert.ok(checkpoint.inputs.length >= 2);
+  assert.ok(Number.isFinite(checkpoint.randomSeed));
+
+  b.room.send("input", { ...frame, seq: 2, commands: [{ type: "endTurn" }] });
+  for (const invalid of [
+    { ...frame, commands: [{ type: "endTurn" }] },
+    { ...frame, seq: 2, epoch: "old-match", commands: [{ type: "endTurn" }] },
+    { ...frame, seq: 2, turn: initial.turn + 1, commands: [{ type: "endTurn" }] },
+    { ...frame, seq: 2, playerId: b.room.sessionId },
+    { ...frame, seq: Number.MAX_SAFE_INTEGER },
+    { ...frame, seq: 2.5 },
+    { ...frame, seq: 2, input: { ...frame.input, aimX: NaN } },
+    { ...frame, seq: 2, commands: [{ type: "selectWeapon", weapon: "fake" }] },
+    { ...frame, seq: 2, commands: Array.from({ length: 7 }, () => ({ type: "jump" })) },
+  ]) a.room.send("input", invalid);
+  a.room.send("command", { type: "endTurn" });
+  const afterInvalid = a.snapshots;
+  await waitFor(() => a.snapshots >= afterInvalid + 3, "invalid input rejection");
+  assert.equal(a.state!.net!.ack, 1);
+  assert.equal(a.state!.turn, initial.turn);
+  assert.equal(a.state!.phase, "playing");
+
+  a.room.send("input", { ...frame, seq: 2, commands: [{ type: "selectWeapon", weapon: "golf" }, { type: "jump" }] });
+  await waitFor(() => a.state!.net!.ack === 2, "new arsenal command and jump accepted");
+  assert.equal(a.state!.players[0].weapon, "golf");
+  assert.ok(a.state!.players[0].vy < 0);
+  const elapsedBefore = a.state!.net!.simulation.elapsed;
+  for (let seq = 3; seq <= 32; seq++) a.room.send("input", {
+    ...frame, seq, dt: 1000000, tick: 99999999,
+    x: -1000, y: -1000, hp: 9999999, damage: 999999,
+  });
+  await waitFor(() => a.state!.net!.ack === 32, "input burst processed without stepping the world");
+  assert.ok(a.state!.net!.simulation.elapsed - elapsedBefore < 0.6, "server time comes from its fixed clock");
+  assert.ok(a.state!.players[0].x > 0 && a.state!.players[0].y > 0);
+  assert.equal(a.state!.players[0].hp, initial.players[0].hp);
+  a.room.send("input", { ...frame, seq: 33, commands: [{ type: "endTurn" }] });
+  await waitFor(() => a.state!.activeTeamId === b.room.sessionId, "authoritative handoff");
+  a.room.send("input", { ...frame, seq: 34, commands: [{ type: "endTurn" }] });
+  const otherTurn = a.state!.turn;
+  const afterHandoff = a.snapshots;
+  await waitFor(() => a.snapshots >= afterHandoff + 2, "late prior-turn command rejected");
+  assert.equal(a.state!.turn, otherTurn);
+  assert.equal(a.state!.activeTeamId, b.room.sessionId);
+
+  a.room.send("restart");
+  await waitFor(() => a.state!.net!.epoch !== frame.epoch, "restart changes prediction epoch");
+  assert.equal(a.state!.net!.ack, 0);
+  a.room.send("input", { ...frame, seq: 35, commands: [{ type: "endTurn" }] });
+  a.room.send("input", { ...frame, epoch: a.state!.net!.epoch, turn: a.state!.turn });
+  await waitFor(() => a.state!.net!.ack === 1, "new match starts a fresh input sequence");
+  assert.equal(a.state!.turn, 1);
+  await a.room.leave();
+  await b.room.leave();
 });

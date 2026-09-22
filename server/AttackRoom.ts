@@ -1,7 +1,9 @@
 import { Room, ServerError, type Client } from "@colyseus/core";
-import { GameEngine } from "../shared/game";
+import { FIXED_STEP, GameEngine } from "../shared/game";
 import type { GameCommand, PlayerInput, Team, WeaponId } from "../shared/types";
 import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, validTeamSettings } from "../shared/settings";
+import { MAX_SEQUENCE_GAP, type ServerState } from "../shared/protocol";
+import { WEAPON_IDS } from "../shared/weapons";
 
 const COLORS = ["#baf27c", "#ffac81", "#acb9ff", "#ffde75"];
 const NEUTRAL: PlayerInput = {
@@ -21,12 +23,23 @@ const COMMANDS = new Set([
   "endTurn",
   "selectWeapon",
 ]);
-const WEAPONS = new Set<WeaponId>(["rocket", "grenade", "pulse"]);
+const WEAPONS = new Set<WeaponId>(WEAPON_IDS);
 type Guest = Team;
 type Budget = { at: number; tokens: number };
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validatedCommand(message: unknown): GameCommand | null {
+  if (!record(message) || typeof message.type !== "string" || !COMMANDS.has(message.type)) return null;
+  if (message.power !== undefined && (typeof message.power !== "number" || !Number.isFinite(message.power))) return null;
+  if (message.weapon !== undefined && (typeof message.weapon !== "string" || !WEAPONS.has(message.weapon as WeaponId))) return null;
+  if (message.type === "selectWeapon" && message.weapon === undefined) return null;
+  const command: GameCommand = { type: message.type as GameCommand["type"] };
+  if (typeof message.power === "number") command.power = Math.max(0, Math.min(1, message.power));
+  if (typeof message.weapon === "string") command.weapon = message.weapon as WeaponId;
+  return command;
 }
 
 /** A transport adapter: movement, combat and turn rules belong to GameEngine. */
@@ -39,13 +52,16 @@ export class AttackRoom extends Room {
   private lastInput = new Map<string, number>();
   private budgets = new Map<string, Budget>();
   private emptySince: number | null = null;
+  private epoch = "";
+  private matchNumber = 0;
+  private sequences = new Map<string, number>();
 
   async onCreate() {
     await this.setPrivate(true);
     this.onMessage("sync", (client) => {
       if (!this.consume(client, "control", 5)) return;
       client.send("lobby", this.lobby());
-      if (this.game) client.send("state", this.game.state);
+      this.sendState(client);
     });
     this.onMessage("input", (client, message: unknown) => {
       if (
@@ -54,59 +70,55 @@ export class AttackRoom extends Room {
         !record(message)
       )
         return;
-      if (
-        typeof message.aimX !== "number" ||
-        !Number.isFinite(message.aimX) ||
-        typeof message.aimY !== "number" ||
-        !Number.isFinite(message.aimY)
-      )
-        return;
       const game = this.game!;
+      const sequenced = "seq" in message || "input" in message || "epoch" in message;
+      let commands: GameCommand[] = [];
+      let input = message;
+      if (sequenced) {
+        const prior = this.sequences.get(client.sessionId) ?? 0;
+        if (!Number.isSafeInteger(message.seq) || (message.seq as number) <= prior ||
+          (message.seq as number) > prior + MAX_SEQUENCE_GAP || message.epoch !== this.epoch ||
+          message.turn !== game.state.turn || message.playerId !== game.state.activePlayerId ||
+          !record(message.input) || !Array.isArray(message.commands) || message.commands.length > 6) return;
+        const parsed = message.commands.map(validatedCommand);
+        if (parsed.some((command) => !command)) return;
+        commands = parsed as GameCommand[];
+        input = message.input;
+      } else if (this.sequences.has(client.sessionId)) return;
+      if (typeof input.aimX !== "number" || !Number.isFinite(input.aimX) ||
+        typeof input.aimY !== "number" || !Number.isFinite(input.aimY)) return;
       game.setInput(game.state.activePlayerId, {
-        left: message.left === true,
-        right: message.right === true,
-        up: message.up === true,
-        down: message.down === true,
+        left: input.left === true,
+        right: input.right === true,
+        up: input.up === true,
+        down: input.down === true,
         aimX: Math.max(
           -game.state.width,
-          Math.min(game.state.width * 2, message.aimX),
+          Math.min(game.state.width * 2, input.aimX),
         ),
         aimY: Math.max(
           -game.state.height,
-          Math.min(game.state.height * 2, message.aimY),
+          Math.min(game.state.height * 2, input.aimY),
         ),
       });
       this.lastInput.set(game.state.activePlayerId, Date.now());
+      if (sequenced) {
+        this.sequences.set(client.sessionId, message.seq as number);
+        for (const command of commands) {
+          if (!this.consume(client, "command", 10)) break;
+          game.command(game.state.activePlayerId, command);
+        }
+      }
     });
     this.onMessage("command", (client, message: unknown) => {
       if (
         !this.canAct(client) ||
         !this.consume(client, "command", 10) ||
-        !record(message)
+        !record(message) || this.sequences.has(client.sessionId)
       )
         return;
-      if (typeof message.type !== "string" || !COMMANDS.has(message.type))
-        return;
-      if (
-        message.power !== undefined &&
-        (typeof message.power !== "number" || !Number.isFinite(message.power))
-      )
-        return;
-      if (
-        message.weapon !== undefined &&
-        (typeof message.weapon !== "string" ||
-          !WEAPONS.has(message.weapon as WeaponId))
-      )
-        return;
-      if (message.type === "selectWeapon" && message.weapon === undefined)
-        return;
-      const command: GameCommand = {
-        type: message.type as GameCommand["type"],
-      };
-      if (typeof message.power === "number")
-        command.power = Math.max(0, Math.min(1, message.power));
-      if (typeof message.weapon === "string")
-        command.weapon = message.weapon as WeaponId;
+      const command = validatedCommand(message);
+      if (!command) return;
       this.game!.command(this.game!.state.activePlayerId, command);
     });
     this.onMessage("teamSettings", (client, message: unknown) => {
@@ -156,7 +168,7 @@ export class AttackRoom extends Room {
     // it creates a second clock timer in Colyseus and starves fixed-step deltas.
     this.patchRate = null;
     this.clock.setInterval(() => {
-      if (this.game) this.broadcast("state", this.game.state);
+      this.sendState();
     }, 50);
     // Keep seats through long drops/reloads, but do not retain abandoned rooms forever.
     this.clock.setInterval(() => {
@@ -192,7 +204,7 @@ export class AttackRoom extends Room {
     this.game?.setTeamConnected(client.sessionId, false);
     this.updateHost();
     this.broadcast("lobby", this.lobby());
-    if (this.game) this.broadcast("state", this.game.state);
+    this.sendState();
   }
 
   onReconnect(client: Client) {
@@ -203,19 +215,20 @@ export class AttackRoom extends Room {
     this.updateHost();
     this.broadcast("lobby", this.lobby());
     client.send("lobby", this.lobby());
-    if (this.game) client.send("state", this.game.state);
+    this.sendState(client);
   }
 
   onLeave(client: Client) {
     this.guests.delete(client.sessionId);
     this.lastInput.delete(client.sessionId);
+    this.sequences.delete(client.sessionId);
     for (const key of this.budgets.keys()) {
       if (key.startsWith(`${client.sessionId}:`)) this.budgets.delete(key);
     }
     this.updateHost();
     this.game?.removePlayer(client.sessionId);
     this.broadcast("lobby", this.lobby());
-    if (this.game) this.broadcast("state", this.game.state);
+    this.sendState();
   }
 
   private canAct(client: Client) {
@@ -246,8 +259,26 @@ export class AttackRoom extends Room {
       seed: Date.now(),
     });
     this.lastInput.clear();
+    this.sequences.clear();
+    this.epoch = `${Date.now().toString(36)}-${++this.matchNumber}`;
     this.broadcast("lobby", this.lobby());
-    this.broadcast("state", this.game.state);
+    this.sendState();
+  }
+
+  private sendState(client?: Client): void {
+    if (!this.game) return;
+    const snapshot = this.game.capture();
+    const state: ServerState = {
+      ...snapshot.state,
+      net: {
+        epoch: this.epoch,
+        tick: Math.round(snapshot.simulation.elapsed / FIXED_STEP),
+        ack: this.sequences.get(snapshot.state.activeTeamId) ?? 0,
+        simulation: snapshot.simulation,
+      },
+    };
+    if (client) client.send("state", state);
+    else this.broadcast("state", state);
   }
 
   private updateHost() {

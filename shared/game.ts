@@ -12,6 +12,9 @@ import type {
 
 import { ropeFixedLength, ropePathLength, updateRopePath } from "./rope.js";
 import { teamSettings } from "./settings.js";
+import { createInventory, WEAPON_CATALOG, WEAPON_IDS, type WeaponDefinition } from "./weapons.js";
+import type { GameSnapshot } from "./protocol.js";
+import { applyImpulse, GRAVITY, WALK_SPEED, HARD_IMPACT_SPEED, limitBodySpeed, surfaceImpact, updateBodyAttitude } from "./physics.js";
 
 export type * from "./types.js";
 
@@ -25,12 +28,10 @@ export const TURN_SECONDS = 45;
 export const RETREAT_SECONDS = 10;
 export const DOUBLE_JUMP_SECONDS = 0.32;
 
-const GRAVITY = 1050;
-const MAX_SPEED = 1100;
 // A normal jump can land on a frog; a longer fall becomes a stomp.
 const STOMP_SPEED = 560;
 const COLORS = ["#9fe870", "#ffb86b", "#b9a2ff", "#71dce4"];
-const WEAPONS: WeaponId[] = ["rocket", "grenade", "pulse"];
+
 const clamp = (value: number, low: number, high: number) =>
   Math.max(low, Math.min(high, value));
 const finite = (value: unknown, fallback: number) =>
@@ -148,10 +149,12 @@ export class GameEngine {
           lookAt: { x: spawn.x + 200, y: spawn.y - 220 },
           rope: null,
           rotation: 0,
+          angularVelocity: 0,
+          impact: 0,
           tumble: 0,
-          inventory: { rocket: 0, grenade: 0, pulse: 0 },
-          weapon: null,
-          hasCrate: false,
+          inventory: createInventory(options.mode),
+          weapon: "rocket",
+          hasCrate: true,
         };
       }));
     const firstTeam = teams.find((team) => team.connected) ?? teams[0]!;
@@ -165,6 +168,7 @@ export class GameEngine {
       teams,
       crates: [],
       projectiles: [],
+      mines: [],
       explosions: [],
       activePlayerId: firstFrog.id,
       activeTeamId: firstTeam.id,
@@ -173,12 +177,42 @@ export class GameEngine {
       timeLeft: options.mode === "practice" ? 90 : TURN_SECONDS,
       mode: options.mode ?? "versus",
       winnerId: null,
-      message: "Grab a crate. Make your shot. Get out of the way.",
+      message: "Choose from your arsenal. Make your shot. Get out of the way.",
     };
     players.forEach((player) => this.inputs.set(player.id, blankInput(player.lookAt)));
     if (firstTeam.connected) this.lastFrog.set(firstTeam.id, firstFrog.id);
     this.spawnCrates();
     if (!firstTeam.connected) this.beginSettling();
+  }
+
+  /** Checkpoints preserve hidden timers and PRNG state for exact prediction replay. */
+  capture(): GameSnapshot {
+    return structuredClone({
+      state: this.state,
+      simulation: {
+        inputs: [...this.inputs],
+        accumulator: this.accumulator,
+        serial: this.serial,
+        randomSeed: this.randomSeed,
+        settlingTime: this.settlingTime,
+        elapsed: this.elapsed,
+        jump: this.jump,
+        lastFrog: [...this.lastFrog],
+      },
+    });
+  }
+
+  restore(snapshot: GameSnapshot): void {
+    const { state, simulation } = structuredClone(snapshot);
+    this.state = state;
+    this.inputs = new Map(simulation.inputs);
+    this.accumulator = simulation.accumulator;
+    this.serial = simulation.serial;
+    this.randomSeed = simulation.randomSeed;
+    this.settlingTime = simulation.settlingTime;
+    this.elapsed = simulation.elapsed;
+    this.jump = simulation.jump;
+    this.lastFrog = new Map(simulation.lastFrog);
   }
 
   setInput(id: string, input: PlayerInput): void {
@@ -246,6 +280,7 @@ export class GameEngine {
         if (input.left !== input.right) player.facing = input.right ? 1 : -1;
         this.jump = { id, at: this.elapsed, facing: player.facing };
         player.vy = -525;
+        player.angularVelocity += player.facing * -1.8;
         player.grounded = false;
         return true;
       case "backflip":
@@ -253,6 +288,8 @@ export class GameEngine {
           this.elapsed - this.jump.at > DOUBLE_JUMP_SECONDS) return false;
         player.vy = -760;
         player.vx = -this.jump.facing * 310;
+        player.angularVelocity = -this.jump.facing * 13;
+        player.tumble = 0.7;
         player.rope = null;
         this.jump = null;
         return true;
@@ -297,7 +334,7 @@ export class GameEngine {
         if (
           this.state.phase !== "playing" ||
           !command.weapon ||
-          !WEAPONS.includes(command.weapon) ||
+          !WEAPON_IDS.includes(command.weapon) ||
           player.inventory[command.weapon] <= 0
         )
           return false;
@@ -363,6 +400,7 @@ export class GameEngine {
       if (player.y + PLAYER_RADIUS >= WATER_Y) this.kill(player);
     }
     this.updateProjectiles(dt);
+    this.updateMines(dt);
     this.pickUpCrates();
 
     if (this.state.mode === "versus") {
@@ -375,7 +413,7 @@ export class GameEngine {
         const survivor = this.state.teams.find((team) => survivingTeams.has(team.id));
         if (
           !survivor ||
-          (this.state.projectiles.length === 0 &&
+          (this.state.projectiles.length === 0 && !this.state.mines.some((mine) => mine.fuse !== null) &&
             survivors.every((player) => player.grounded && Math.hypot(player.vx, player.vy) < 42))
         ) {
           this.state.phase = "finished";
@@ -403,11 +441,11 @@ export class GameEngine {
     if (this.state.phase === "settling") {
       this.settlingTime += dt;
       const moving = this.state.players.some(
-        (player) => player.alive && Math.hypot(player.vx, player.vy) > 42,
+        (player) => player.alive && (!player.grounded || Math.hypot(player.vx, player.vy) > 42),
       );
       if (
-        this.state.projectiles.length === 0 &&
-        (!moving || this.settlingTime > 2.5)
+        this.state.projectiles.length === 0 && !this.state.mines.some((mine) => mine.fuse !== null) &&
+        !moving
       )
         this.nextTurn();
       return;
@@ -429,34 +467,64 @@ export class GameEngine {
     const wasGrounded = player.grounded;
     if (axis) {
       player.facing = axis > 0 ? 1 : -1;
-      const acceleration = player.rope ? 990 : wasGrounded ? 1800 : 520;
-      player.vx += axis * acceleration * dt;
-      if (wasGrounded && !player.rope && player.tumble <= 0) player.vx = clamp(player.vx, -245, 245);
-    } else if (wasGrounded) player.vx *= Math.exp(-(player.tumble > 0 ? 1.3 : 10) * dt);
-    else player.vx *= Math.exp(-0.1 * dt);
+      if (player.rope) {
+        const pivot = player.rope.bends.at(-1) ?? player.rope;
+        const dx = player.x - pivot.x, dy = player.y - pivot.y;
+        const distance = Math.hypot(dx, dy) || 1;
+        // Pump along the swing arc; steering also works above the anchor.
+        const direction = dy < 0 ? -axis : axis;
+        const tangent = (player.vx * dy - player.vy * dx) / distance;
+        const effort = clamp(1 - tangent * direction / 1100, 0, 1);
+        player.vx += direction * dy / distance * 850 * effort * dt;
+        player.vy -= direction * dx / distance * 850 * effort * dt;
+      } else if (wasGrounded) {
+        const speed = player.vx * axis;
+        // A motor can accelerate to walking pace or brake a launch, never erase it.
+        if (speed < WALK_SPEED) {
+          const acceleration = player.tumble > 0 ? 520 : 1800;
+          player.vx += axis * Math.min(acceleration * dt, WALK_SPEED - speed);
+        }
+      } else player.vx += axis * (player.tumble > 0 ? 240 : 520) * dt;
+    }
+    if (wasGrounded) {
+      const rolling = player.tumble > 0 || Math.abs(player.vx) > WALK_SPEED + 10;
+      player.vx *= Math.exp(-(rolling ? 0.9 : axis ? 0 : 10) * dt);
+    } else player.vx *= Math.exp(-0.025 * dt);
 
     player.vy += GRAVITY * dt;
+    let reelSpeed = 0;
     if (player.rope && active) {
+      const oldLength = player.rope.length;
       player.rope.length = clamp(
         player.rope.length + (Number(input.down) - Number(input.up)) * 205 * dt,
         42,
         GRAPPLE_RANGE,
       );
+      reelSpeed = (player.rope.length - oldLength) / dt;
+      if (reelSpeed < 0 && ropePathLength(player.rope, player) >= oldLength - 2) {
+        const pivot = player.rope.bends.at(-1) ?? player.rope;
+        const dx = player.x - pivot.x, dy = player.y - pivot.y;
+        const distance = Math.hypot(dx, dy) || 1;
+        const tx = dy / distance, ty = -dx / distance;
+        const tangent = player.vx * tx + player.vy * ty;
+        const free = Math.max(PLAYER_RADIUS + 2, player.rope.length - ropeFixedLength(player.rope));
+        // Reeling does work: preserve angular momentum as the radius shrinks.
+        const boost = Math.min(0.035, (oldLength - player.rope.length) / free) *
+          clamp((1250 - Math.abs(tangent)) / 500, 0, 1);
+        player.vx += tx * tangent * boost;
+        player.vy += ty * tangent * boost;
+      }
     }
-    player.vx = clamp(player.vx, -MAX_SPEED, MAX_SPEED);
-    player.vy = clamp(player.vy, -MAX_SPEED, MAX_SPEED);
+    limitBodySpeed(player);
     player.grounded = false;
-    this.movePlayer(player, player.vx * dt, player.vy * dt);
+    this.movePlayer(player, player.vx * dt, player.vy * dt, true);
 
-    if (player.tumble > 0) {
-      player.tumble = Math.max(0, player.tumble - dt);
-      const angle = player.rotation + player.vx * dt / PLAYER_RADIUS;
-      player.rotation = Math.atan2(Math.sin(angle), Math.cos(angle));
-    } else player.rotation *= Math.exp(-14 * dt);
-    this.constrainRope(player);
+    if (player.hp <= 0) { this.kill(player); return; }
+    this.constrainRope(player, reelSpeed);
+    updateBodyAttitude(player, dt);
   }
 
-  private constrainRope(player: Player): void {
+  private constrainRope(player: Player, reelSpeed = 0): void {
     const rope = player.rope;
     if (!rope) return;
     for (let iteration = 0; iteration < 3; iteration++) {
@@ -469,16 +537,17 @@ export class GameEngine {
       const dx = player.x - pivot.x;
       const dy = player.y - pivot.y;
       const distance = Math.hypot(dx, dy);
-      if (distance <= freeLength + 0.001) break;
+      if (distance < freeLength - 0.001 || distance < 0.001) break;
       const nx = dx / distance;
       const ny = dy / distance;
       const previousY = player.y;
-      this.movePlayer(player, -nx * (distance - freeLength), -ny * (distance - freeLength));
+      const excess = Math.max(0, distance - freeLength);
+      this.movePlayer(player, -nx * excess, -ny * excess);
       if (player.y < previousY - 0.01) player.grounded = false;
       const radialVelocity = player.vx * nx + player.vy * ny;
-      if (radialVelocity > 0) {
-        player.vx -= nx * radialVelocity;
-        player.vy -= ny * radialVelocity;
+      if (radialVelocity > reelSpeed) {
+        player.vx -= nx * (radialVelocity - reelSpeed);
+        player.vy -= ny * (radialVelocity - reelSpeed);
       }
     }
     if (!updateRopePath(rope, player, this.state.platforms)) {
@@ -491,12 +560,14 @@ export class GameEngine {
 
   /** Equal-mass circular bodies: terrain takes priority over separation. */
   private resolvePlayerContacts(): void {
-    const players = this.state.players.filter((p) => p.alive);
+    // Resolve from the floor upward so a whole pile inherits support in one pass.
+    const players = this.state.players.filter((p) => p.alive).sort((a, b) => b.y - a.y);
     for (let iteration = 0; iteration < 8; iteration++) {
       for (let i = 0; i < players.length; i++) {
         for (let j = i + 1; j < players.length; j++) {
           const a = players[i];
           const b = players[j];
+          if (!a.alive || !b.alive) continue;
           const dx = b.x - a.x;
           const dy = b.y - a.y;
           const distance = Math.hypot(dx, dy);
@@ -516,7 +587,7 @@ export class GameEngine {
           if (movedB < overlap / 2 - 0.001)
             this.movePlayer(a, -nx * (overlap / 2 - movedB), -ny * (overlap / 2 - movedB));
           if (closing < 0) {
-            const impulse = -closing * 0.54;
+            const impulse = -closing * (closing < -STOMP_SPEED ? 0.68 : 0.54);
             a.vx -= impulse * nx;
             a.vy -= impulse * ny;
             b.vx += impulse * nx;
@@ -525,23 +596,32 @@ export class GameEngine {
               const upper = ny > 0 ? a : b;
               const lower = ny > 0 ? b : a;
               const direction = Math.sign(lower.x - upper.x) || Math.sign(upper.vx) || 1;
-              lower.vx += direction * Math.min(570, -closing * 0.7);
-              lower.vy = Math.min(lower.vy, -Math.min(260, -closing * 0.28));
+              applyImpulse(lower, direction * Math.min(680, -closing * 0.8),
+                Math.min(lower.vy, -Math.min(330, -closing * 0.34)) - lower.vy);
               upper.vy = Math.min(upper.vy, -Math.min(210, -closing * 0.22));
-              lower.grounded = false;
               upper.grounded = false;
-              lower.tumble = 1.8;
-              lower.rope = null;
+              lower.tumble = Math.max(lower.tumble, 1.8);
             } else if (Math.abs(ny) < 0.55 && closing < -260) {
               a.tumble = b.tumble = 1.1;
+              a.angularVelocity -= ny * closing / 100 + nx * 4;
+              b.angularVelocity += ny * closing / 100 + nx * 4;
+            }
+            if (closing < -HARD_IMPACT_SPEED) {
+              const damage = Math.min(45, Math.round((-closing - HARD_IMPACT_SPEED) * 0.05 + 2));
+              a.hp = Math.max(0, a.hp - damage);
+              b.hp = Math.max(0, b.hp - damage);
+              a.impact = b.impact = Math.min(1, -closing / 1000);
+              if (a.hp <= 0) this.kill(a);
+              if (b.hp <= 0) this.kill(b);
             }
           }
-          if (ny > 0.55 && a.vy >= b.vy && b.grounded) {
+          if (ny > 0.55 && a.vy >= 0 && b.grounded) {
             a.grounded = true;
-            a.vy = b.vy;
-          } else if (ny < -0.55 && b.vy >= a.vy && a.grounded) {
+            // A supported body transmits weight into the floor, not downward velocity.
+            a.vy = b.vy = 0;
+          } else if (ny < -0.55 && b.vy >= 0 && a.grounded) {
             b.grounded = true;
-            b.vy = a.vy;
+            a.vy = b.vy = 0;
           }
         }
       }
@@ -549,15 +629,28 @@ export class GameEngine {
   }
 
   /** Small swept axis moves keep fast launches from crossing thin platforms. */
-  private movePlayer(player: Player, dx: number, dy: number): void {
+  private movePlayer(player: Player, dx: number, dy: number, physical = false): void {
     const steps = Math.max(
       1,
       Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / 6),
     );
-    const stepX = dx / steps;
-    const stepY = dy / steps;
+    let stepX = dx / steps;
+    let stepY = dy / steps;
+    const contact = (nx: number, ny: number) => {
+      if (physical) surfaceImpact(player, nx, ny);
+      else {
+        // Separation/reeling may touch terrain but cannot manufacture a crash.
+        const inward = player.vx * nx + player.vy * ny;
+        if (inward < 0) {
+          player.vx -= nx * inward;
+          player.vy -= ny * inward;
+        }
+        if (ny < 0 && player.vy >= 0) player.grounded = true;
+      }
+    };
     for (let step = 0; step < steps; step++) {
       let nextX = clamp(player.x + stepX, PLAYER_RADIUS, WIDTH - PLAYER_RADIUS);
+      let hitX = 0;
       for (const platform of this.state.platforms) {
         const overlapsY =
           player.y + PLAYER_RADIUS > platform.y + 0.05 &&
@@ -569,21 +662,23 @@ export class GameEngine {
           nextX + PLAYER_RADIUS >= platform.x
         ) {
           nextX = Math.min(nextX, platform.x - PLAYER_RADIUS);
-          player.vx = 0;
+          hitX = -1;
         } else if (
           stepX < 0 &&
           player.x - PLAYER_RADIUS >= platform.x + platform.w - 0.1 &&
           nextX - PLAYER_RADIUS <= platform.x + platform.w
         ) {
           nextX = Math.max(nextX, platform.x + platform.w + PLAYER_RADIUS);
-          player.vx = 0;
+          hitX = 1;
         }
       }
-      if (nextX <= PLAYER_RADIUS || nextX >= WIDTH - PLAYER_RADIUS)
-        player.vx = 0;
+      if (nextX <= PLAYER_RADIUS && stepX < 0) hitX = 1;
+      else if (nextX >= WIDTH - PLAYER_RADIUS && stepX > 0) hitX = -1;
+      if (hitX) { contact(hitX, 0); stepX = 0; }
       player.x = nextX;
 
       let nextY = player.y + stepY;
+      let hitY = 0;
       for (const platform of this.state.platforms) {
         const overlapsX =
           player.x + PLAYER_RADIUS > platform.x &&
@@ -595,17 +690,18 @@ export class GameEngine {
           nextY + PLAYER_RADIUS >= platform.y
         ) {
           nextY = Math.min(nextY, platform.y - PLAYER_RADIUS);
-          player.vy = 0;
-          player.grounded = true;
+          hitY = -1;
         } else if (
           stepY < 0 &&
           player.y - PLAYER_RADIUS >= platform.y + platform.h - 0.1 &&
           nextY - PLAYER_RADIUS <= platform.y + platform.h
         ) {
           nextY = Math.max(nextY, platform.y + platform.h + PLAYER_RADIUS);
-          player.vy = Math.max(0, player.vy);
+          hitY = 1;
         }
       }
+      if (nextY <= -220 && stepY < 0) hitY = 1;
+      if (hitY) { contact(0, hitY); stepY = 0; }
       player.y = Math.max(-220, nextY);
     }
   }
@@ -624,10 +720,10 @@ export class GameEngine {
     this.state.crates = this.state.crates.filter(
       (crate) => !collected.includes(crate),
     );
-    for (const crate of collected) active.inventory[crate.weapon]++;
+    for (const crate of collected) active.inventory[crate.weapon] += WEAPON_CATALOG[crate.weapon].ammo;
     this.selectAvailableWeapon(active);
     active.hasCrate = true;
-    this.state.message = `${active.name} added ${collected.length === 1 ? `a ${collected[0]!.weapon}` : `${collected.length} rounds`} to their pack. Aim, fire, then retreat!`;
+    this.state.message = `${active.name} added ${collected.length === 1 ? `${WEAPON_CATALOG[collected[0]!.weapon].name} resupply` : `${collected.length} rounds`} to their pack. Aim, fire, then retreat!`;
   }
 
   private aim(
@@ -648,110 +744,216 @@ export class GameEngine {
     const direction = this.aim(player, input);
     if (!direction || !player.weapon) return false;
     const weapon = player.weapon;
+    const definition = WEAPON_CATALOG[weapon];
     const power = clamp(finite(requestedPower, 1), 0.2, 1);
-    if (weapon === "pulse") {
-      this.explode(
-        player.x + direction.x * 92,
-        player.y + direction.y * 92,
-        108,
-        44,
-        player.id,
-      );
+    if (definition.attack === "melee") {
+      const angle = Math.atan2(direction.y, direction.x);
+      this.state.explosions.push({ id: this.id("swing"), x: player.x + direction.x * 48,
+        y: player.y + direction.y * 48, radius: definition.range, age: 0,
+        kind: "melee", weapon: weapon, color: definition.color, direction: angle });
+      for (const target of this.state.players) {
+        if (!target.alive || target.id === player.id) continue;
+        const dx = target.x - player.x, dy = target.y - player.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance > definition.range + PLAYER_RADIUS || distance < 1) continue;
+        if ((dx * direction.x + dy * direction.y) / distance < 0.5) continue;
+        if (this.raycast(player.x, player.y, dx / distance, dy / distance, distance)) continue;
+        target.hp = Math.max(0, target.hp - Math.round(definition.damage * (0.7 + power * 0.3)));
+        applyImpulse(target, direction.x * definition.impulse * power,
+          direction.y * definition.impulse * power - definition.lift,
+          (Math.sign(direction.x) || player.facing) * (weapon === "golf" ? 12 : 18));
+        if (target.hp === 0) this.kill(target);
+      }
+      if (weapon === "boxing") applyImpulse(player, -direction.x * 140, -70, -player.facing * 2);
+    } else if (definition.attack === "blast") {
+      const obstruction = this.raycast(player.x, player.y, direction.x, direction.y, definition.range);
+      const reach = obstruction ? Math.max(0, obstruction.distance - 5) : definition.range;
+      this.explode(player.x + direction.x * reach, player.y + direction.y * reach,
+        definition.radius, definition.damage, player.id, definition, direction);
+    } else if (definition.attack === "mine") {
+      this.state.mines.push({ id: this.id("mine"), ownerId: player.id,
+        x: player.x, y: player.y, vx: direction.x * definition.speed * power + player.vx * 0.3,
+        vy: direction.y * definition.speed * power - 65, kind: weapon as "mine" | "springMine",
+        placedTurn: this.state.turn, fuse: null, settled: false });
+    } else if (definition.attack === "airstrike") {
+      const center = clamp(input.aimX, 24, WIDTH - 24);
+      for (let index = 0; index < definition.pellets; index++) {
+        const offset = (index - (definition.pellets - 1) / 2) * definition.spread;
+        this.state.projectiles.push({ id: this.id("shot"), ownerId: player.id,
+          x: clamp(center + offset, 12, WIDTH - 12), y: -100 - index * 85,
+          vx: weapon === "airstrike" ? 38 : 0, vy: definition.speed,
+          kind: weapon, life: definition.life, radius: definition.radius, damage: definition.damage,
+          variant: "strike", age: 0 });
+      }
     } else {
-      const speed = weapon === "rocket" ? 800 * power : 630 * power;
-      // Start at the shooter's center and ignore only the shooter. This catches
-      // point-blank enemies and walls instead of teleporting a muzzle past them.
-      this.state.projectiles.push({
-        id: this.id("shot"),
-        ownerId: player.id,
-        x: player.x,
-        y: player.y,
-        vx: direction.x * speed + player.vx * 0.25,
-        vy: direction.y * speed + player.vy * 0.25,
-        kind: weapon,
-        life: weapon === "rocket" ? 5 : 2.1,
-        radius: weapon === "rocket" ? 94 : 126,
-        damage: weapon === "rocket" ? 66 : 78,
-      });
+      for (let index = 0; index < definition.pellets; index++) {
+        const offset = definition.pellets === 1 ? 0 :
+          (index / (definition.pellets - 1) - 0.5) * 2 * definition.spread;
+        const angle = Math.atan2(direction.y, direction.x) + offset;
+        const speed = definition.speed * power;
+        // Starting inside the shooter makes every wall and nearby enemy count.
+        this.state.projectiles.push({ id: this.id("shot"), ownerId: player.id,
+          x: player.x, y: player.y, vx: Math.cos(angle) * speed + player.vx * 0.35,
+          vy: Math.sin(angle) * speed + player.vy * 0.35,
+          kind: weapon, life: definition.life, radius: definition.radius,
+          damage: definition.damage, age: 0 });
+      }
+      if (weapon === "shotgun") applyImpulse(player, -direction.x * 190, -direction.y * 190 - 40, -player.facing * 3);
     }
     player.inventory[weapon]--;
     this.selectAvailableWeapon(player);
     player.hasCrate = false;
     this.state.phase = "retreat";
     this.state.timeLeft = RETREAT_SECONDS;
-    this.state.message = "Shot sent! Ten seconds to find cover.";
+    this.state.message = definition.attack === "mine"
+      ? `${definition.name} placed. It arms next turn. Ten seconds to retreat!`
+      : `${definition.name}! Ten seconds to find cover.`;
     return true;
   }
 
   private updateProjectiles(dt: number): void {
     const remaining: Projectile[] = [];
     for (const projectile of this.state.projectiles) {
+      const definition = WEAPON_CATALOG[projectile.kind];
+      const isFragment = projectile.variant === "fragment";
+      const contact = isFragment && projectile.kind !== "banana" ? "explode" : definition.contact;
+      const gravity = isFragment ? (projectile.kind === "firework" ? 250 : 1050) : definition.gravity;
       projectile.life -= dt;
-      if (projectile.kind === "grenade") projectile.vy += GRAVITY * dt;
-      const distance = Math.hypot(projectile.vx, projectile.vy) * dt;
-      const steps = Math.max(1, Math.ceil(distance / 4));
-      let detonate = false;
-      for (let step = 0; step < steps && !detonate; step++) {
-        const prevX = projectile.x;
-        const prevY = projectile.y;
-        projectile.x += (projectile.vx * dt) / steps;
-        projectile.y += (projectile.vy * dt) / steps;
-        const hitPlayer = this.state.players.some(
-          (player) =>
-            player.alive &&
-            player.id !== projectile.ownerId &&
-            Math.hypot(player.x - projectile.x, player.y - projectile.y) <=
-              PLAYER_RADIUS + 5,
-        );
-        if (hitPlayer) {
-          detonate = true;
-          break;
-        }
-        const platform = this.state.platforms.find(
-          (candidate) =>
-            projectile.x + 5 >= candidate.x &&
-            projectile.x - 5 <= candidate.x + candidate.w &&
-            projectile.y + 5 >= candidate.y &&
-            projectile.y - 5 <= candidate.y + candidate.h,
-        );
-        if (platform) {
-          if (projectile.kind === "rocket") {
-            detonate = true;
-            break;
-          }
-          if (prevY + 5 <= platform.y) {
-            projectile.y = platform.y - 5.1;
-            projectile.vy = -Math.abs(projectile.vy) * 0.54;
-            projectile.vx *= 0.78;
-          } else if (prevY - 5 >= platform.y + platform.h) {
-            projectile.y = platform.y + platform.h + 5.1;
-            projectile.vy = Math.abs(projectile.vy) * 0.54;
-          } else {
-            projectile.x =
-              prevX < platform.x
-                ? platform.x - 5.1
-                : platform.x + platform.w + 5.1;
-            projectile.vx *= -0.54;
+      projectile.age = (projectile.age ?? 0) + dt;
+      if (projectile.attachedPlayerId) {
+        const attached = this.state.players.find((p) => p.id === projectile.attachedPlayerId && p.alive);
+        if (attached) { projectile.x = attached.x; projectile.y = attached.y; }
+      }
+      if (!projectile.stuck) {
+        projectile.vy += gravity * dt;
+        if (projectile.kind === "boomerang" && projectile.age > 0.4) {
+          const owner = this.state.players.find((p) => p.id === projectile.ownerId);
+          if (owner) {
+            const dx = owner.x - projectile.x, dy = owner.y - projectile.y;
+            const length = Math.max(1, Math.hypot(dx, dy));
+            projectile.vx += dx / length * 1400 * dt;
+            projectile.vy += dy / length * 1400 * dt;
           }
         }
       }
-      if (
-        projectile.y >= WATER_Y ||
-        projectile.x < -100 ||
-        projectile.x > WIDTH + 100 ||
-        projectile.y < -500
-      )
-        continue;
-      if (detonate || projectile.life <= 0)
-        this.explode(
-          projectile.x,
-          projectile.y,
-          projectile.radius,
-          projectile.damage,
-        );
-      else remaining.push(projectile);
+      const distance = Math.hypot(projectile.vx, projectile.vy) * dt;
+      const steps = Math.max(1, Math.ceil(distance / 4));
+      const bodyRadius = projectile.kind === "anvil" ? 12 : projectile.kind === "megaBomb" ? 9 : 5;
+      let detonate = false;
+      for (let step = 0; step < steps && !detonate && !projectile.stuck; step++) {
+        const prevX = projectile.x, prevY = projectile.y;
+        projectile.x += (projectile.vx * dt) / steps;
+        projectile.y += (projectile.vy * dt) / steps;
+        const hitPlayer = this.state.players.find((player) => player.alive &&
+          (player.id !== projectile.ownerId || (projectile.kind === "boomerang" && projectile.age! > 0.4)) &&
+          Math.hypot(player.x - projectile.x, player.y - projectile.y) <= PLAYER_RADIUS + bodyRadius);
+        if (hitPlayer) {
+          if (contact === "stick") {
+            projectile.stuck = true;
+            projectile.attachedPlayerId = hitPlayer.id;
+            projectile.vx = projectile.vy = 0;
+          } else detonate = true;
+          break;
+        }
+        const platform = this.state.platforms.find((candidate) =>
+          projectile.x + bodyRadius >= candidate.x && projectile.x - bodyRadius <= candidate.x + candidate.w &&
+          projectile.y + bodyRadius >= candidate.y && projectile.y - bodyRadius <= candidate.y + candidate.h);
+        if (platform) {
+          if (contact === "explode") { detonate = true; break; }
+          if (contact === "stick") {
+            projectile.x = prevX;
+            projectile.y = prevY;
+            projectile.stuck = true;
+            projectile.vx = projectile.vy = 0;
+            break;
+          }
+          projectile.bounces = (projectile.bounces ?? 0) + 1;
+          if (prevY + bodyRadius <= platform.y + 0.1) {
+            projectile.y = platform.y - bodyRadius - 0.1;
+            projectile.vy = Math.abs(projectile.vy) < 35 ? 0 : -Math.abs(projectile.vy) * definition.bounce;
+            projectile.vx *= definition.bounce > 0.85 ? 0.98 : 0.82;
+          } else if (prevY - bodyRadius >= platform.y + platform.h - 0.1) {
+            projectile.y = platform.y + platform.h + bodyRadius + 0.1;
+            projectile.vy = Math.abs(projectile.vy) * definition.bounce;
+          } else {
+            projectile.x = prevX < platform.x ? platform.x - bodyRadius - 0.1 : platform.x + platform.w + bodyRadius + 0.1;
+            projectile.vx *= -definition.bounce;
+          }
+        }
+        if (contact === "bounce" && (projectile.x < bodyRadius || projectile.x > WIDTH - bodyRadius)) {
+          projectile.x = clamp(projectile.x, bodyRadius, WIDTH - bodyRadius);
+          projectile.vx *= -definition.bounce;
+        }
+      }
+      if (projectile.y >= WATER_Y || projectile.x < -100 || projectile.x > WIDTH + 100 || projectile.y < -650) continue;
+      if (detonate || projectile.life <= 0) {
+        this.explode(projectile.x, projectile.y, projectile.radius, projectile.damage,
+          undefined, definition, undefined, isFragment ? 0.65 : 1);
+        if (definition.fragments > 0 && !isFragment) {
+          for (let index = 0; index < definition.fragments; index++) {
+            const angle = projectile.kind === "firework"
+              ? index / definition.fragments * Math.PI * 2
+              : -Math.PI + (index + 0.5) / definition.fragments * Math.PI;
+            const speed = projectile.kind === "banana" ? 300 + (index % 2) * 160 : 340 + (index % 3) * 60;
+            remaining.push({ id: this.id("fragment"), ownerId: projectile.ownerId,
+              x: projectile.x, y: projectile.y - 6, vx: Math.cos(angle) * speed + projectile.vx * 0.15,
+              vy: Math.sin(angle) * speed, kind: projectile.kind, variant: "fragment", age: 0,
+              life: projectile.kind === "banana" ? 1.1 + index * 0.13 : 1.6,
+              radius: projectile.kind === "banana" ? 112 : projectile.kind === "firework" ? 72 : 83,
+              damage: projectile.kind === "banana" ? 42 : projectile.kind === "firework" ? 24 : 31 });
+          }
+        }
+      } else remaining.push(projectile);
     }
     this.state.projectiles = remaining;
+  }
+
+  private updateMines(dt: number): void {
+    const active = this.state.players.find((p) => p.id === this.state.activePlayerId && p.alive);
+    this.state.mines = this.state.mines.filter((mine) => {
+      const definition = WEAPON_CATALOG[mine.kind];
+      if (!mine.settled) {
+        mine.vy += GRAVITY * dt;
+        const steps = Math.max(1, Math.ceil(Math.hypot(mine.vx, mine.vy) * dt / 4));
+        for (let step = 0; step < steps && !mine.settled; step++) {
+          const px = mine.x, py = mine.y;
+          mine.x = clamp(mine.x + mine.vx * dt / steps, 8, WIDTH - 8);
+          mine.y += mine.vy * dt / steps;
+          const platform = this.state.platforms.find((p) => mine.x + 8 >= p.x && mine.x - 8 <= p.x + p.w && mine.y + 8 >= p.y && mine.y - 8 <= p.y + p.h);
+          if (!platform) continue;
+          if (py + 8 <= platform.y + 0.1) {
+            mine.y = platform.y - 8;
+            mine.vx = mine.vy = 0;
+            mine.settled = true;
+          } else if (py - 8 >= platform.y + platform.h - 0.1) {
+            mine.y = platform.y + platform.h + 8.1;
+            mine.vy = Math.abs(mine.vy) * 0.2;
+          } else {
+            mine.x = px < platform.x ? platform.x - 8.1 : platform.x + platform.w + 8.1;
+            mine.vx *= -0.2;
+          }
+        }
+      }
+      if (mine.y >= WATER_Y) return false;
+      // Persistent traps never detonate merely because a waiting frog is nearby.
+      // Their deployer also gets the entire deployment turn to retreat safely.
+      if (mine.fuse === null && mine.placedTurn < this.state.turn && active && this.canMovePhase()) {
+        const dx = active.x - mine.x, dy = active.y - mine.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < definition.range && !this.raycast(mine.x, mine.y, dx / Math.max(1, distance), dy / Math.max(1, distance), distance)) {
+          mine.fuse = 0.45;
+          this.state.message = `${definition.name} is beeping. Move!`;
+        }
+      }
+      if (mine.fuse !== null) {
+        mine.fuse -= dt;
+        if (mine.fuse <= 0) {
+          this.explode(mine.x, mine.y, definition.radius, definition.damage, undefined, definition);
+          return false;
+        }
+      }
+      return true;
+    });
   }
 
   private explode(
@@ -760,24 +962,29 @@ export class GameEngine {
     radius: number,
     damage: number,
     immunePlayerId?: string,
+    definition: WeaponDefinition = WEAPON_CATALOG.rocket,
+    direction?: Point,
+    impulseScale = 1,
   ): void {
-    this.state.explosions.push({ id: this.id("blast"), x, y, radius, age: 0 });
+    this.state.explosions.push({ id: this.id("blast"), x, y, radius, age: 0,
+      kind: definition.kind, weapon: definition.id, color: definition.color,
+      ...(direction ? { direction: Math.atan2(direction.y, direction.x) } : {}) });
     for (const player of this.state.players) {
       if (!player.alive || player.id === immunePlayerId) continue;
-      const dx = player.x - x;
-      const dy = player.y - y;
+      const dx = player.x - x, dy = player.y - y;
       const distance = Math.hypot(dx, dy);
       if (distance > radius + PLAYER_RADIUS) continue;
       const force = Math.max(0, 1 - distance / (radius + PLAYER_RADIUS));
-      player.hp = Math.max(
-        0,
-        player.hp - Math.round(damage * (0.28 + force * 0.72)),
-      );
-      const length = Math.max(distance, 1);
-      player.vx += (dx / length) * (220 + force * 620);
-      player.vy += (dy / length) * (180 + force * 520) - 160;
-      player.grounded = false;
-      player.rope = null;
+      const nx = distance > 1 ? dx / distance : 0;
+      const ny = distance > 1 ? dy / distance : -1;
+      const cover = this.raycast(x, y, nx, ny, Math.max(0, distance - PLAYER_RADIUS)) ? 0.4 : 1;
+      player.hp = Math.max(0, player.hp - Math.round(damage * (0.28 + force * 0.72) * cover));
+      const impulse = definition.impulse * (0.32 + force * 0.68) * impulseScale * cover;
+      const pull = definition.kind === "pull" ? -1 : 1;
+      const launchX = definition.kind === "push" && direction ? direction.x : nx * pull;
+      const launchY = definition.kind === "push" && direction ? direction.y : ny * pull;
+      applyImpulse(player, launchX * impulse, launchY * impulse - definition.lift * impulseScale,
+        (Math.sign(launchX) || player.facing) * (4 + force * 14) * impulseScale);
       if (player.hp <= 0) this.kill(player);
     }
   }
@@ -812,6 +1019,8 @@ export class GameEngine {
           const index = this.state.teams.findIndex((team) => team.id === player.teamId);
           Object.assign(player, frogSpawn(index, player.number - 1));
           player.rotation = 0;
+          player.angularVelocity = 0;
+          player.impact = 0;
           player.tumble = 0;
           player.vx = 0;
           player.vy = 0;
@@ -853,6 +1062,7 @@ export class GameEngine {
     }
     this.jump = null;
     this.state.players.forEach((player) => {
+      if (this.state.mode === "practice") player.inventory = createInventory("practice");
       this.selectAvailableWeapon(player);
       player.hasCrate = player.alive && player.weapon !== null;
       player.rope = null;
@@ -871,7 +1081,7 @@ export class GameEngine {
   private selectAvailableWeapon(player: Player): void {
     if (!player.weapon || player.inventory[player.weapon] <= 0) {
       player.weapon =
-        WEAPONS.find((weapon) => player.inventory[weapon] > 0) ?? null;
+        WEAPON_IDS.find((weapon) => player.inventory[weapon] > 0) ?? null;
     }
   }
 
@@ -899,16 +1109,13 @@ export class GameEngine {
         id: this.id("crate"),
         x: nearX,
         y: platform.y - PLAYER_RADIUS,
-        weapon:
-          this.state.turn === 1
-            ? "rocket"
-            : WEAPONS[Math.floor(this.random() * WEAPONS.length)]!,
+        weapon: WEAPON_IDS[Math.floor(this.random() * WEAPON_IDS.length)]!,
       },
-      ...this.state.platforms.filter((p) => p.h < 100).map((p, index) => ({
+      ...this.state.platforms.filter((p) => p.h < 100).map((p) => ({
         id: this.id("crate"),
         x: p.x + p.w / 2,
         y: p.y - PLAYER_RADIUS,
-        weapon: WEAPONS[(index + 1) % WEAPONS.length]!,
+        weapon: WEAPON_IDS[Math.floor(this.random() * WEAPON_IDS.length)]!,
       })),
     ];
   }
