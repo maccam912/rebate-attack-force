@@ -1,6 +1,8 @@
 import type {
   GameCommand,
   GameOptions,
+  GameSoundEvent,
+  GameSoundKind,
   GameState,
   Platform,
   Player,
@@ -27,6 +29,7 @@ export const GRAPPLE_RANGE = 680;
 export const TURN_SECONDS = 45;
 export const RETREAT_SECONDS = 10;
 export const DOUBLE_JUMP_SECONDS = 0.32;
+export const MAX_SOUND_EVENTS = 128;
 
 // A normal jump can land on a frog; a longer fall becomes a stomp.
 const STOMP_SPEED = 560;
@@ -170,6 +173,8 @@ export class GameEngine {
       projectiles: [],
       mines: [],
       explosions: [],
+      soundEvents: [],
+      soundSequence: 0,
       activePlayerId: firstFrog.id,
       activeTeamId: firstTeam.id,
       phase: "playing",
@@ -282,6 +287,7 @@ export class GameEngine {
         player.vy = -525;
         player.angularVelocity += player.facing * -1.8;
         player.grounded = false;
+        this.playerSound("jump", player);
         return true;
       case "backflip":
         if (!this.jump || this.jump.id !== id || player.grounded ||
@@ -292,6 +298,7 @@ export class GameEngine {
         player.tumble = 0.7;
         player.rope = null;
         this.jump = null;
+        this.playerSound("backflip", player);
         return true;
       case "grapple": {
         const direction = this.aim(player, input);
@@ -310,11 +317,13 @@ export class GameEngine {
           length: Math.max(40, hit.distance),
           bends: [],
         };
+        this.playerSound("grapple", player);
         return true;
       }
       case "release": {
         const wasAttached = player.rope !== null;
         player.rope = null;
+        if (wasAttached) this.playerSound("release", player);
         return wasAttached;
       }
       case "fire":
@@ -338,6 +347,8 @@ export class GameEngine {
           player.inventory[command.weapon] <= 0
         )
           return false;
+        if (player.weapon !== command.weapon)
+          this.playerSound("select", player, { weapon: command.weapon });
         player.weapon = command.weapon;
         return true;
       case "endTurn":
@@ -361,6 +372,27 @@ export class GameEngine {
   private canMove(): boolean {
     return this.canMovePhase() && this.state.teams.some(
       (team) => team.id === this.state.activeTeamId && team.connected);
+  }
+
+  private sound(kind: GameSoundKind, point: Point,
+    detail: Omit<Partial<GameSoundEvent>, "id" | "kind" | "x" | "y"> = {}): void {
+    // Sound IDs must never consume gameplay IDs or random numbers.
+    const events = this.state.soundEvents ??= [];
+    const id = (this.state.soundSequence ?? events.at(-1)?.id ?? 0) + 1;
+    this.state.soundSequence = id;
+    events.push({ id, kind, x: point.x, y: point.y, ...detail });
+    if (events.length > MAX_SOUND_EVENTS) events.splice(0, events.length - MAX_SOUND_EVENTS);
+  }
+
+  private playerSound(kind: GameSoundKind, player: Player,
+    detail: Pick<Partial<GameSoundEvent>, "weapon" | "intensity"> = {}): void {
+    this.sound(kind, player, { playerId: player.id, ...detail });
+  }
+
+  private damageSound(player: Player, previousHp: number, weapon?: WeaponId): void {
+    if (player.hp < previousHp)
+      this.playerSound("hurt", player, { ...(weapon ? { weapon } : {}),
+        intensity: clamp((previousHp - player.hp) / 60, 0.15, 1) });
   }
 
   private canMovePhase(): boolean {
@@ -397,7 +429,7 @@ export class GameEngine {
           player.rope.length = Math.max(player.rope.length, ropePathLength(player.rope, player));
         else player.rope = null;
       }
-      if (player.y + PLAYER_RADIUS >= WATER_Y) this.kill(player);
+      if (player.y + PLAYER_RADIUS >= WATER_Y) this.kill(player, true);
     }
     this.updateProjectiles(dt);
     this.updateMines(dt);
@@ -422,6 +454,8 @@ export class GameEngine {
           this.state.message = survivor
             ? `${survivor.name} wins the rebate!`
             : "Everyone took the plunge. Draw!";
+          this.sound("victory", survivors[0] ?? { x: WIDTH / 2, y: HEIGHT / 2 },
+            survivors[0] ? { playerId: survivors[0].id } : {});
         }
         return;
       }
@@ -562,6 +596,7 @@ export class GameEngine {
   private resolvePlayerContacts(): void {
     // Resolve from the floor upward so a whole pile inherits support in one pass.
     const players = this.state.players.filter((p) => p.alive).sort((a, b) => b.y - a.y);
+    const heardContacts = new Set<string>();
     for (let iteration = 0; iteration < 8; iteration++) {
       for (let i = 0; i < players.length; i++) {
         for (let j = i + 1; j < players.length; j++) {
@@ -587,6 +622,13 @@ export class GameEngine {
           if (movedB < overlap / 2 - 0.001)
             this.movePlayer(a, -nx * (overlap / 2 - movedB), -ny * (overlap / 2 - movedB));
           if (closing < 0) {
+            const pair = `${i}:${j}`;
+            if (closing < -120 && !heardContacts.has(pair)) {
+              const softLanding = Math.abs(ny) > 0.55 && closing >= -STOMP_SPEED;
+              this.playerSound(softLanding ? "land" : "bounce", ny > 0 ? a : b,
+                { intensity: clamp(-closing / 1000, 0.15, 1) });
+              heardContacts.add(pair);
+            }
             const impulse = -closing * (closing < -STOMP_SPEED ? 0.68 : 0.54);
             a.vx -= impulse * nx;
             a.vy -= impulse * ny;
@@ -608,8 +650,11 @@ export class GameEngine {
             }
             if (closing < -HARD_IMPACT_SPEED) {
               const damage = Math.min(45, Math.round((-closing - HARD_IMPACT_SPEED) * 0.05 + 2));
+              const hpA = a.hp, hpB = b.hp;
               a.hp = Math.max(0, a.hp - damage);
               b.hp = Math.max(0, b.hp - damage);
+              this.damageSound(a, hpA);
+              this.damageSound(b, hpB);
               a.impact = b.impact = Math.min(1, -closing / 1000);
               if (a.hp <= 0) this.kill(a);
               if (b.hp <= 0) this.kill(b);
@@ -636,8 +681,15 @@ export class GameEngine {
     );
     let stepX = dx / steps;
     let stepY = dy / steps;
+    const previousHp = player.hp;
+    let impactSound: { kind: "land" | "bounce"; speed: number } | undefined;
     const contact = (nx: number, ny: number) => {
-      if (physical) surfaceImpact(player, nx, ny);
+      if (physical) {
+        const speed = -(player.vx * nx + player.vy * ny);
+        surfaceImpact(player, nx, ny);
+        if (speed > 120 && (!impactSound || speed > impactSound.speed))
+          impactSound = { kind: ny < 0 && player.grounded ? "land" : "bounce", speed };
+      }
       else {
         // Separation/reeling may touch terrain but cannot manufacture a crash.
         const inward = player.vx * nx + player.vy * ny;
@@ -704,6 +756,9 @@ export class GameEngine {
       if (hitY) { contact(0, hitY); stepY = 0; }
       player.y = Math.max(-220, nextY);
     }
+    if (impactSound) this.playerSound(impactSound.kind, player,
+      { intensity: clamp(impactSound.speed / 1000, 0.15, 1) });
+    this.damageSound(player, previousHp);
   }
 
   private pickUpCrates(): void {
@@ -723,6 +778,7 @@ export class GameEngine {
     for (const crate of collected) active.inventory[crate.weapon] += WEAPON_CATALOG[crate.weapon].ammo;
     this.selectAvailableWeapon(active);
     active.hasCrate = true;
+    this.playerSound("pickup", active, { weapon: collected[0]!.weapon });
     this.state.message = `${active.name} added ${collected.length === 1 ? `${WEAPON_CATALOG[collected[0]!.weapon].name} resupply` : `${collected.length} rounds`} to their pack. Aim, fire, then retreat!`;
   }
 
@@ -746,6 +802,7 @@ export class GameEngine {
     const weapon = player.weapon;
     const definition = WEAPON_CATALOG[weapon];
     const power = clamp(finite(requestedPower, 1), 0.2, 1);
+    this.playerSound("shot", player, { weapon, intensity: power });
     if (definition.attack === "melee") {
       const angle = Math.atan2(direction.y, direction.x);
       this.state.explosions.push({ id: this.id("swing"), x: player.x + direction.x * 48,
@@ -758,7 +815,9 @@ export class GameEngine {
         if (distance > definition.range + PLAYER_RADIUS || distance < 1) continue;
         if ((dx * direction.x + dy * direction.y) / distance < 0.5) continue;
         if (this.raycast(player.x, player.y, dx / distance, dy / distance, distance)) continue;
+        const previousHp = target.hp;
         target.hp = Math.max(0, target.hp - Math.round(definition.damage * (0.7 + power * 0.3)));
+        this.damageSound(target, previousHp, weapon);
         applyImpulse(target, direction.x * definition.impulse * power,
           direction.y * definition.impulse * power - definition.lift,
           (Math.sign(direction.x) || player.facing) * (weapon === "golf" ? 12 : 18));
@@ -840,6 +899,7 @@ export class GameEngine {
       const steps = Math.max(1, Math.ceil(distance / 4));
       const bodyRadius = projectile.kind === "anvil" ? 12 : projectile.kind === "megaBomb" ? 9 : 5;
       let detonate = false;
+      let contactSpeed = 0;
       for (let step = 0; step < steps && !detonate && !projectile.stuck; step++) {
         const prevX = projectile.x, prevY = projectile.y;
         projectile.x += (projectile.vx * dt) / steps;
@@ -849,6 +909,7 @@ export class GameEngine {
           Math.hypot(player.x - projectile.x, player.y - projectile.y) <= PLAYER_RADIUS + bodyRadius);
         if (hitPlayer) {
           if (contact === "stick") {
+            contactSpeed = Math.hypot(projectile.vx, projectile.vy);
             projectile.stuck = true;
             projectile.attachedPlayerId = hitPlayer.id;
             projectile.vx = projectile.vy = 0;
@@ -861,6 +922,7 @@ export class GameEngine {
         if (platform) {
           if (contact === "explode") { detonate = true; break; }
           if (contact === "stick") {
+            contactSpeed = Math.hypot(projectile.vx, projectile.vy);
             projectile.x = prevX;
             projectile.y = prevY;
             projectile.stuck = true;
@@ -869,22 +931,30 @@ export class GameEngine {
           }
           projectile.bounces = (projectile.bounces ?? 0) + 1;
           if (prevY + bodyRadius <= platform.y + 0.1) {
+            contactSpeed = Math.max(contactSpeed, Math.abs(projectile.vy));
             projectile.y = platform.y - bodyRadius - 0.1;
             projectile.vy = Math.abs(projectile.vy) < 35 ? 0 : -Math.abs(projectile.vy) * definition.bounce;
             projectile.vx *= definition.bounce > 0.85 ? 0.98 : 0.82;
           } else if (prevY - bodyRadius >= platform.y + platform.h - 0.1) {
+            contactSpeed = Math.max(contactSpeed, Math.abs(projectile.vy));
             projectile.y = platform.y + platform.h + bodyRadius + 0.1;
             projectile.vy = Math.abs(projectile.vy) * definition.bounce;
           } else {
+            contactSpeed = Math.max(contactSpeed, Math.abs(projectile.vx));
             projectile.x = prevX < platform.x ? platform.x - bodyRadius - 0.1 : platform.x + platform.w + bodyRadius + 0.1;
             projectile.vx *= -definition.bounce;
           }
         }
         if (contact === "bounce" && (projectile.x < bodyRadius || projectile.x > WIDTH - bodyRadius)) {
+          contactSpeed = Math.max(contactSpeed, Math.abs(projectile.vx));
           projectile.x = clamp(projectile.x, bodyRadius, WIDTH - bodyRadius);
           projectile.vx *= -definition.bounce;
         }
       }
+      if (contactSpeed > 120) this.sound("bounce", projectile,
+        { weapon: projectile.kind, intensity: clamp(contactSpeed / 1000, 0.15, 1) });
+      if (projectile.y >= WATER_Y) this.sound("splash", projectile,
+        { weapon: projectile.kind, intensity: 0.4 });
       if (projectile.y >= WATER_Y || projectile.x < -100 || projectile.x > WIDTH + 100 || projectile.y < -650) continue;
       if (detonate || projectile.life <= 0) {
         this.explode(projectile.x, projectile.y, projectile.radius, projectile.damage,
@@ -912,6 +982,7 @@ export class GameEngine {
     const active = this.state.players.find((p) => p.id === this.state.activePlayerId && p.alive);
     this.state.mines = this.state.mines.filter((mine) => {
       const definition = WEAPON_CATALOG[mine.kind];
+      let contactSpeed = 0;
       if (!mine.settled) {
         mine.vy += GRAVITY * dt;
         const steps = Math.max(1, Math.ceil(Math.hypot(mine.vx, mine.vy) * dt / 4));
@@ -922,19 +993,27 @@ export class GameEngine {
           const platform = this.state.platforms.find((p) => mine.x + 8 >= p.x && mine.x - 8 <= p.x + p.w && mine.y + 8 >= p.y && mine.y - 8 <= p.y + p.h);
           if (!platform) continue;
           if (py + 8 <= platform.y + 0.1) {
+            contactSpeed = Math.max(contactSpeed, Math.abs(mine.vy));
             mine.y = platform.y - 8;
             mine.vx = mine.vy = 0;
             mine.settled = true;
           } else if (py - 8 >= platform.y + platform.h - 0.1) {
+            contactSpeed = Math.max(contactSpeed, Math.abs(mine.vy));
             mine.y = platform.y + platform.h + 8.1;
             mine.vy = Math.abs(mine.vy) * 0.2;
           } else {
+            contactSpeed = Math.max(contactSpeed, Math.abs(mine.vx));
             mine.x = px < platform.x ? platform.x - 8.1 : platform.x + platform.w + 8.1;
             mine.vx *= -0.2;
           }
         }
       }
-      if (mine.y >= WATER_Y) return false;
+      if (contactSpeed > 120) this.sound("bounce", mine,
+        { weapon: mine.kind, intensity: clamp(contactSpeed / 1000, 0.15, 1) });
+      if (mine.y >= WATER_Y) {
+        this.sound("splash", mine, { weapon: mine.kind, intensity: 0.4 });
+        return false;
+      }
       // Persistent traps never detonate merely because a waiting frog is nearby.
       // Their deployer also gets the entire deployment turn to retreat safely.
       if (mine.fuse === null && mine.placedTurn < this.state.turn && active && this.canMovePhase()) {
@@ -942,6 +1021,7 @@ export class GameEngine {
         const distance = Math.hypot(dx, dy);
         if (distance < definition.range && !this.raycast(mine.x, mine.y, dx / Math.max(1, distance), dy / Math.max(1, distance), distance)) {
           mine.fuse = 0.45;
+          this.sound("mineTrigger", mine, { weapon: mine.kind });
           this.state.message = `${definition.name} is beeping. Move!`;
         }
       }
@@ -966,6 +1046,8 @@ export class GameEngine {
     direction?: Point,
     impulseScale = 1,
   ): void {
+    this.sound("explosion", { x, y }, { weapon: definition.id,
+      intensity: clamp(radius / 180 * impulseScale, 0.2, 1) });
     this.state.explosions.push({ id: this.id("blast"), x, y, radius, age: 0,
       kind: definition.kind, weapon: definition.id, color: definition.color,
       ...(direction ? { direction: Math.atan2(direction.y, direction.x) } : {}) });
@@ -978,7 +1060,9 @@ export class GameEngine {
       const nx = distance > 1 ? dx / distance : 0;
       const ny = distance > 1 ? dy / distance : -1;
       const cover = this.raycast(x, y, nx, ny, Math.max(0, distance - PLAYER_RADIUS)) ? 0.4 : 1;
+      const previousHp = player.hp;
       player.hp = Math.max(0, player.hp - Math.round(damage * (0.28 + force * 0.72) * cover));
+      this.damageSound(player, previousHp, definition.id);
       const impulse = definition.impulse * (0.32 + force * 0.68) * impulseScale * cover;
       const pull = definition.kind === "pull" ? -1 : 1;
       const launchX = definition.kind === "push" && direction ? direction.x : nx * pull;
@@ -989,7 +1073,11 @@ export class GameEngine {
     }
   }
 
-  private kill(player: Player): void {
+  private kill(player: Player, drowned = false): void {
+    if (!player.alive) return;
+    if (drowned) this.sound("splash", { x: player.x, y: WATER_Y },
+      { playerId: player.id, intensity: clamp(Math.hypot(player.vx, player.vy) / 1000, 0.5, 1) });
+    this.playerSound("death", player);
     player.alive = false;
     player.hp = 0;
     player.rope = null;
@@ -1028,6 +1116,7 @@ export class GameEngine {
           player.alive = true;
           player.grounded = true;
           player.lookAt = { x: player.x + 200, y: player.y - 220 };
+          this.playerSound("respawn", player);
         }
       });
       this.state.activePlayerId = this.state.players[0]!.id;
@@ -1069,11 +1158,15 @@ export class GameEngine {
       this.inputs.set(player.id, blankInput(player.lookAt));
     });
     this.state.turn++;
+    for (const mine of this.state.mines)
+      if (mine.placedTurn === this.state.turn - 1)
+        this.sound("mineArm", mine, { weapon: mine.kind });
     this.state.phase = "playing";
     this.state.timeLeft = this.state.mode === "practice" ? 90 : TURN_SECONDS;
     const active = this.state.players.find(
       (player) => player.id === this.state.activePlayerId,
     )!;
+    this.playerSound("switch", active);
     this.state.message = `${active.name}'s turn. ${active.hasCrate ? "Use your saved ammo or collect more supplies." : "Find a supply crate."}`;
     this.spawnCrates();
   }

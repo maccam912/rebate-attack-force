@@ -46,6 +46,8 @@ Aiming guides appear only while you control the active frog. Everyone can see th
 
 Ropes reach 680 world pixels and attach to any solid platform surface. They wrap around corners and unwind as you swing back. Pumping acts along the swing, reeling adds angular momentum, and release retains both tangential and inward velocity. Frogs are solid bodies: push them, land on them, or stomp from height. Explosions and melee blows launch frogs into spins; they bounce off walls, roll across floors, and follow their flight arc as the spin subsides. Ordinary jumps and backflips land safely, but long falls and hard impacts cause damage. Water still eliminates frogs.
 
+Sound starts with your first click or keypress. The ♪ button mutes all effects and remembers your preference. Footsteps follow actual ground movement; swing and rushing-air sounds grow with speed. Jumps, reeling, weapon charging and firing, explosions, ricochets, impacts, panic croaks, deaths, water splashes, respawns, pickups, mines, character changes, and the final countdown all have cues. Background tabs go quiet. Online action sounds follow the server so prediction corrections cannot replay them.
+
 The arsenal uses one shared catalog for simulation, aiming hints, and the interface:
 
 | Family | Weapons |
@@ -94,7 +96,8 @@ See [deployment instructions](docs/deployment.md) for ingress, TLS, health probe
 - `src/camera.ts`: viewport scaling, active-player tracking, and pointer conversion.
 - `src/renderer.ts`: original Canvas 2D frogs, terrain, effects, and atmosphere.
 - `src/frog.ts`: shared gaze presentation, proximity expressions, and two-bone leg poses.
-- `src/main.ts`: browser interface, input, sound, and render interpolation.
+- `src/main.ts`: browser interface, input, and render interpolation.
+- `src/audio.ts` and `src/game-audio.ts`: procedural sound mixer, spatial cues, and motion foley; the shared simulation retains a bounded sound event history for online delivery.
 - `src/network.ts`: anonymous rooms, automatic reconnects, and saved team seats for reloads.
 
 ```sh
@@ -103,13 +106,14 @@ npm test
 npm run build
 # With npm run dev running in another terminal:
 npm run test:browser
+npm run test:audio
 # Optional local oMLX visual check, after screenshots exist:
 npm run test:visual
 ```
 
 The optional visual check uses your local oMLX vision model and a blank-image negative control; it skips when the service or a supported model is unavailable. Override with `OMLX_BASE_URL`, `OMLX_API_KEY`, and `OMLX_VISION_MODEL`.
 
-The unit suite covers deterministic simulation and checkpoint replay, latency and jitter, all weapon families, mystery pickups, saved ammunition, rope momentum, damaging impacts, body collisions, mine arming, deadlines, drowning, delayed victory, and complete matches. Integration tests use real Colyseus clients on an ephemeral local port. The browser smoke test drives two actual browser clients and saves screenshots to `test-results/`.
+The unit suite covers deterministic simulation and checkpoint replay, latency and jitter, all weapon families, mystery pickups, saved ammunition, rope momentum, damaging impacts, body collisions, mine arming, deadlines, drowning, delayed victory, sound event delivery, movement foley, and complete matches. Integration tests use real Colyseus clients on an ephemeral local port. The browser smoke test drives two actual browser clients and saves screenshots to `test-results/`. The audio smoke test uses the Vite dev server to measure real Web Audio output and check every cue, weapon, mute/unlock controls, and audio graph cleanup.
 
 Browser tests use system Chrome on macOS when present. Otherwise install Chromium with `npx playwright install chromium`, or set `CHROME_PATH`. To check the production bundle served by `npm start`, use `BASE_URL=http://localhost:2567 npm run test:browser` after building.
 
@@ -121,4 +125,4 @@ Research and fidelity boundaries are recorded in [reference mechanics](docs/refe
 
 ## Credits
 
-All game illustrations and branding were drawn in code for this project. Audio uses [Kenney](https://kenney.nl/)'s CC0 packs; filenames and included licenses are in [audio attribution](docs/audio-attribution.md). Fonts and licenses are documented in [font attribution](docs/font-attribution.md).
+All game illustrations, branding, and the procedural Web Audio sound effects were created in code for this project. Earlier [Kenney](https://kenney.nl/) CC0 audio assets remain bundled; filenames and included licenses are in [audio attribution](docs/audio-attribution.md). Fonts and licenses are documented in [font attribution](docs/font-attribution.md).

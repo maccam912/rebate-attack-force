@@ -12,6 +12,8 @@ import { followCamera, screenToWorld, type Camera } from "./camera";
 import { RoomConnection, savedSeat, type LobbyState } from "./network";
 import { WEAPONS, WEAPON_CATALOG } from "../shared/weapons";
 import type { ServerState } from "../shared/protocol";
+import { GameAudio, type SoundName } from "./audio";
+import { GameSoundDirector } from "./game-audio";
 
 import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, validTeamSettings } from "../shared/settings";
 
@@ -36,7 +38,7 @@ app.innerHTML = `
   <div class="menu-backdrop" id="menu-overlay"><section class="panel menu-panel" aria-label="Game menu"><div class="menu-brand">${logo}<h1>REBATE <span>ATTACK FORCE</span></h1></div><button class="secondary-button" id="resume-button" hidden>Resume game <span>Esc</span></button><div id="play-panel"></div><div class="connection-status" id="connection-status">THE SCRAPYARD IS OPEN</div></section></div>
   <div class="match-over" id="match-over" hidden><div><div class="eyebrow">THE SCRAPYARD HAS SPOKEN</div><h2 id="winner-name"></h2><button class="primary-button" id="rematch-button">Run it back <span>↗</span></button></div></div>
 </main>
-<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Hard impacts and long falls hurt. Water is a one-way trip.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Mines arm on later turns; approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares a keyboard. Online mode gives you a private room link for 2–4 players. The host chooses each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice keeps you in control and respawns your target. These maps and frogs are original. Sound effects are CC0 by Kenney.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
+<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Hard impacts and long falls hurt. Water is a one-way trip.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Mines arm on later turns; approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares a keyboard. Online mode gives you a private room link for 2–4 players. The host chooses each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice keeps you in control and respawns your target. These maps, frogs, and synthesized sound effects are original. Use the ♪ button to mute or enable sound.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -55,7 +57,7 @@ let state: GameState = engine.state;
 let network: RoomConnection | null = null;
 let lobby: LobbyState | null = null;
 let tool: "grapple" | "weapon" = "grapple";
-let sound = false;
+let sound = true;
 let playerName = "Sprout";
 let busy = false;
 let lastEnter = -Infinity;
@@ -74,37 +76,41 @@ let toastTimer = 0;
 let prevTime = performance.now(),
   accumulated = 0,
   lastHud = 0;
-let soundsReady = false;
+let audioFocused = true;
+let awaitingSoundState = false;
 let previousCrates = state.crates.length;
 let previousCrateIds = new Set(state.crates.map((crate) => crate.id));
 let revealedCrates = new Set<string>();
-let previousProjectiles = new Set<string>();
-let previousExplosions = new Set<string>();
 let previousTurn = state.turn;
-let previousRope = false;
 let previousSignature = "";
-const audio = new Map<string, HTMLAudioElement>();
+const audio = new GameAudio();
+const soundDirector = new GameSoundDirector(audio);
 try {
   playerName = localStorage.getItem("raf-name") || "Sprout";
-  sound = localStorage.getItem("raf-sound") === "true";
+  sound = localStorage.getItem("raf-sound") !== "false";
 } catch {}
-for (const key of ["ui", "grapple", "pickup", "shot", "explosion"]) {
-  const a = new Audio(`/audio/${key}.ogg`);
-  a.volume = key === "explosion" ? 0.23 : 0.3;
-  a.preload = "auto";
-  audio.set(key, a);
-}
+audio.setEnabled(sound);
 function unlockAudio() {
-  soundsReady = true;
+  audio.unlock();
 }
-function playSound(key: string) {
-  if (!sound || !soundsReady) return;
-  const a = audio.get(key);
-  if (a) {
-    a.currentTime = 0;
-    void a.play().catch(() => {});
-  }
+function playSound(key: SoundName) {
+  audio.play(key);
 }
+function soundAudible() {
+  return sound && audioFocused && !document.hidden && screen === "playing" && !menuOpen && $("guide").hidden &&
+    (!network || (network.isConnected && !awaitingSoundState));
+}
+function soundListener() {
+  const player = active();
+  return player ? { x: player.x, y: player.y } : { x: state.width / 2, y: state.height / 2 };
+}
+// Capture gestures from mouse, keyboard, and touch controls before their actions run.
+document.addEventListener("pointerdown", unlockAudio, { capture: true });
+document.addEventListener("keydown", unlockAudio, { capture: true });
+document.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
+  if (button && !button.disabled && button.id !== "sound-button") playSound("ui");
+});
 function escapeHtml(s: string) {
   return s.replace(
     /[&<>"']/g,
@@ -166,14 +172,18 @@ function hook() {
   const p = active();
   if (!p || !canControl()) return;
   const success = command({ type: p.rope ? "release" : "grapple" });
-  if (!success && !p.rope)
+  if (!success && !p.rope) {
+    playSound("empty");
     announce("Aim at a platform within reach, then hook again.");
+  }
 }
 function setTool(next: "grapple" | "weapon") {
   if (next === "weapon" && !active()?.hasCrate) {
+    playSound("empty");
     announce("Your pockets are empty. Pick up a supply crate to get ammo.");
     return;
   }
+  if (tool !== next) playSound("select");
   tool = next;
   updateHud(true);
 }
@@ -194,12 +204,15 @@ function clearInputs() {
   syncInput();
 }
 function updateSound() {
+  audio.setEnabled(sound);
   $("sound-icon").textContent = sound ? "♪" : "◌";
   $("sound-label").textContent = sound ? "Sound on" : "Sound off";
   $("sound-button").setAttribute(
     "aria-label",
     sound ? "Mute sound" : "Enable sound",
   );
+  $("sound-button").setAttribute("aria-pressed", String(sound));
+  $("sound-button").title = sound ? "Mute sound effects" : "Enable sound effects";
 }
 function saveName() {
   const name = $<HTMLInputElement>("player-name")?.value.trim();
@@ -252,7 +265,6 @@ function renderPanel() {
         (b.onclick = () => {
           saveName();
           selectedMode = b.dataset.mode as typeof selectedMode;
-          playSound("ui");
           renderPanel();
         }),
     );
@@ -265,7 +277,6 @@ function renderPanel() {
       if (!validSetup()) return;
       saveName();
       unlockAudio();
-      playSound("ui");
       if (selectedMode === "online") void connectOnline();
       else startLocal();
     };
@@ -351,11 +362,9 @@ function resetObserved() {
   previousCrates = state.crates.length;
   previousCrateIds = new Set(state.crates.map((crate) => crate.id));
   revealedCrates = new Set();
-  previousProjectiles = new Set();
-  previousExplosions = new Set();
   previousTurn = state.turn;
-  previousRope = false;
   previousSignature = "";
+  soundDirector.reset(state);
 }
 async function connectOnline(roomId?: string, rejoin = false) {
   if (busy) return;
@@ -366,6 +375,7 @@ async function connectOnline(roomId?: string, rejoin = false) {
   busy = true;
   renderPanel();
   let matchEpoch: string | undefined;
+  let resetAudioOnState = false;
   const connection = new RoomConnection({
     onLobby(next) {
       if (network !== connection) return;
@@ -381,12 +391,15 @@ async function connectOnline(roomId?: string, rejoin = false) {
       const changed = screen !== "playing" || (epoch !== undefined && epoch !== matchEpoch);
       matchEpoch = epoch;
       state = next;
+      awaitingSoundState = false;
       screen = "playing";
       engine = null;
       if (changed) {
         resetObserved();
         renderPanel();
       }
+      if (resetAudioOnState) { soundDirector.reset(state); resetAudioOnState = false; }
+      soundDirector.observe(next, soundListener(), soundAudible());
       updateHud(true);
     },
     onClose(reason) {
@@ -396,12 +409,15 @@ async function connectOnline(roomId?: string, rejoin = false) {
       screen = "menu";
       engine = new GameEngine({ mode: "practice" });
       state = engine.state;
+      soundDirector.reset(state);
       renderPanel();
       announce(reason);
     },
     onConnection(connected) {
       if (network !== connection) return;
       clearInputs();
+      awaitingSoundState = true;
+      if (!connected) { audio.reset(); resetAudioOnState = true; }
       $("connection-status").textContent = connected ? "CONNECTED TO THE SCRAPYARD" : "RECONNECTING · YOUR TEAM’S TURNS ARE SKIPPED";
       updateHud(true);
     },
@@ -575,7 +591,6 @@ function detectEvents() {
   const pickups = [...previousCrateIds].filter((id) => !crateIds.has(id) && !revealedCrates.has(id));
   if (state.turn === previousTurn && state.crates.length < previousCrates && pickups.length) {
     pickups.forEach((id) => revealedCrates.add(id));
-    playSound("pickup");
     announce(
       canControl()
         ? state.message
@@ -584,18 +599,13 @@ function detectEvents() {
   }
   previousCrates = state.crates.length;
   previousCrateIds = crateIds;
-  for (const p of state.projectiles)
-    if (!previousProjectiles.has(p.id)) { playSound("shot"); previousProjectiles.add(p.id); }
-  for (const e of state.explosions)
-    if (!previousExplosions.has(e.id)) { playSound("explosion"); previousExplosions.add(e.id); }
-  if (active()?.rope && !previousRope) playSound("grapple");
-  previousRope = !!active()?.rope;
+  // Predicted states can rewind; only the server callback plays online one-shots.
+  if (!network) soundDirector.observe(state, soundListener(), soundAudible());
   if (state.turn !== previousTurn) {
     toggleArsenal(false);
     clearInputs();
     tool = "grapple";
     previousTurn = state.turn;
-    playSound("ui");
   }
   if (!active()?.hasCrate) tool = "grapple";
 }
@@ -688,10 +698,17 @@ window.addEventListener("keydown", (e) => {
 });
 window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 window.addEventListener("blur", () => {
+  audioFocused = false;
+  audio.setSuspended(true);
   clearInputs();
   $("charging").hidden = true;
 });
+window.addEventListener("focus", () => {
+  audioFocused = true;
+  audio.setSuspended(document.hidden);
+});
 document.addEventListener("visibilitychange", () => {
+  audio.setSuspended(document.hidden || !audioFocused);
   if (document.hidden) clearInputs();
 });
 for (const button of document.querySelectorAll<HTMLButtonElement>(
@@ -733,9 +750,9 @@ async function fullscreen() {
 }
 $("fullscreen-button").onclick = () => void fullscreen();
 $("sound-button").onclick = () => {
-  unlockAudio();
   sound = !sound;
   updateSound();
+  unlockAudio();
   try {
     localStorage.setItem("raf-sound", String(sound));
   } catch {}
@@ -801,6 +818,10 @@ function frame(now: number) {
     menu: screen !== "playing",
   });
   detectEvents();
+  soundDirector.update(renderedState, dt, {
+    audible: soundAudible(), listener: soundListener(),
+    charge: chargingAt === null ? 0 : power,
+  });
   updateHud();
   requestAnimationFrame(frame);
 }
@@ -828,6 +849,7 @@ Object.assign(window, {
       camera,
       aim,
       viewport,
+      sound: { ...audio.diagnostics },
       ...state,
     }),
 });

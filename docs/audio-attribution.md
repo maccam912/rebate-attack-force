@@ -1,6 +1,8 @@
 # Audio credits
 
-Sound effects by [Kenney](https://kenney.nl), distributed under [Creative Commons Zero (CC0)](https://creativecommons.org/publicdomain/zero/1.0/). Copied from the user's Kenney Game Assets All-in-1 3.5.0 library. These files are unrelated to Crate Before Attack and no audio from that game was copied.
+The current soundtrack of effects is synthesized by `src/audio.ts` using Web Audio oscillators, filtered noise, and envelopes. These original effects include frog vocalizations, movement, impacts, water, weapon families, mines, and interface cues. They require no downloads, external voices, or speech service. `src/game-audio.ts` controls movement foley, stereo positioning, distance, and event playback.
+
+The five earlier sound assets below remain bundled but are no longer used by the mixer. They are by [Kenney](https://kenney.nl), distributed under [Creative Commons Zero (CC0)](https://creativecommons.org/publicdomain/zero/1.0/). Copied from the user's Kenney Game Assets All-in-1 3.5.0 library. These files are unrelated to Crate Before Attack and no audio from that game was copied.
 
 | Project asset | Kenney pack | Original filename | Intended cue |
 | --- | --- | --- | --- |

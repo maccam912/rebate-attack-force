@@ -6,6 +6,22 @@ export type WeaponId =
 export type GameMode = "practice" | "versus";
 export type GamePhase = "playing" | "retreat" | "settling" | "waiting" | "finished";
 
+export type GameSoundKind =
+  | "jump" | "backflip" | "grapple" | "release" | "land" | "bounce"
+  | "hurt" | "death" | "splash" | "respawn" | "shot" | "explosion"
+  | "pickup" | "switch" | "select" | "mineArm" | "mineTrigger" | "victory";
+
+/** A bounded history lets network snapshots retain even very short-lived actions. */
+export interface GameSoundEvent {
+  id: number;
+  kind: GameSoundKind;
+  x: number;
+  y: number;
+  playerId?: string;
+  weapon?: WeaponId;
+  intensity?: number;
+}
+
 export interface TeamSettings {
   frogs: number;
   hp: number;
@@ -133,6 +149,9 @@ export interface GameState {
   projectiles: Projectile[];
   mines: Mine[];
   explosions: Explosion[];
+  /** Optional when reading older saved states or servers. */
+  soundEvents?: GameSoundEvent[];
+  soundSequence?: number;
   activePlayerId: string;
   activeTeamId: string;
   phase: GamePhase;
