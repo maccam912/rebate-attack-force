@@ -8,10 +8,10 @@ export interface Camera extends Point {
 }
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
 
-export function followCamera(previous: Camera | null, state: GameState, width: number, height: number, dt: number): Camera {
+export function followCamera(previous: Camera | null, state: GameState, width: number, height: number, dt: number, touch = false): Camera {
   const target = state.players.find((p) => p.id === state.activePlayerId)!;
   const zoom = Math.max(width / state.width, height / state.height,
-    Math.max(0.65, Math.min(width / 1100, height / 760, 1.4)));
+    Math.max(touch ? 0.45 : 0.65, Math.min(width / 1100, height / 760, 1.4)));
   const viewWidth = width / zoom;
   const viewHeight = height / zoom;
   const x = clamp(target.x + clamp(target.vx * 0.14, -100, 100) - viewWidth * 0.5, 0, state.width - viewWidth);

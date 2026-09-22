@@ -28,3 +28,17 @@ test("aim conversion respects camera translation, zoom, and resized viewports", 
     assert.ok(camera.width <= state.width && camera.height <= state.height);
   }
 });
+
+test("touch cameras keep the frog visible with room to aim above the control deck", () => {
+  const state = new GameEngine().state;
+  for (const [width, height] of [[320, 352], [390, 628], [844, 224]]) {
+    const camera = followCamera(null, state, width, height, 1 / 60, true);
+    const frog = state.players[0];
+    assert.ok(camera.width >= 700, "Touch aiming includes nearby grapple targets");
+    assert.ok(frog.x >= camera.x && frog.x <= camera.x + camera.width);
+    assert.ok(frog.y >= camera.y && frog.y <= camera.y + camera.height);
+    const point = screenToWorld(camera, { x: width / 2, y: height / 2 });
+    assert.equal(point.x, camera.x + camera.width / 2);
+    assert.equal(point.y, camera.y + camera.height / 2);
+  }
+});

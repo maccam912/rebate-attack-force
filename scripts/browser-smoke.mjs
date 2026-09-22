@@ -42,12 +42,17 @@ async function leaveMatch(page) {
 async function assertViewport(page) {
   const result = await page.evaluate(() => {
     const r = document.getElementById("game").getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height, vw: innerWidth, vh: innerHeight, scroll: document.documentElement.scrollHeight };
+    const touch = document.getElementById("app").dataset.touch === "true";
+    const deck = document.querySelector(".touch-controls").getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height, vw: innerWidth, vh: innerHeight, scroll: document.documentElement.scrollHeight, touch, deckTop: deck.top };
   });
   assert.equal(result.x, 0);
   assert.equal(result.y, 0);
   assert.equal(result.width, result.vw);
-  assert.equal(result.height, result.vh);
+  if (result.touch) {
+    assert.ok(result.height > 0 && result.height < result.vh, "Phone canvas reserves room for thumb controls");
+    assert.ok(result.height <= result.deckTop, "Controls do not cover the canvas");
+  } else assert.equal(result.height, result.vh);
   assert.equal(result.scroll, result.vh, "No surrounding page to scroll");
 }
 const wait = async (p, fn) => p.waitForFunction(fn);

@@ -1,5 +1,5 @@
 import "./style.css";
-import { DOUBLE_JUMP_SECONDS, GameEngine } from "../shared/game";
+import { DOUBLE_JUMP_SECONDS, GRAPPLE_RANGE, GameEngine } from "../shared/game";
 import type {
   GameState,
   PlayerInput,
@@ -14,6 +14,7 @@ import { WEAPONS, WEAPON_CATALOG } from "../shared/weapons";
 import type { ServerState } from "../shared/protocol";
 import { GameAudio, type SoundName } from "./audio";
 import { GameSoundDirector } from "./game-audio";
+import { createTouchControls } from "./touch-controls";
 
 import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, validTeamSettings } from "../shared/settings";
 
@@ -34,11 +35,15 @@ app.innerHTML = `
   <div class="charging-indicator" id="charging" hidden>SHOT POWER<div class="power-meter"><div id="power-fill"></div></div></div>
   <section class="arsenal-panel" id="arsenal-panel" aria-label="Weapon arsenal" hidden><div class="arsenal-heading"><div><div class="eyebrow">DEPARTMENT OF BAD IDEAS</div><h2>Pick your trouble.</h2></div><button class="icon-button" id="close-arsenal" aria-label="Close arsenal">×</button></div><p class="arsenal-intro">One attack per turn. Hold to charge; release to cause problems.</p><div class="inventory" id="inventory"></div><div class="arsenal-footer">Crates resupply your stash · Hard landings hurt · B to close</div></section>
   <div class="arena-bottom"><div class="toolbelt"><button class="tool-button active" id="grapple-tool"><span class="key">1</span> Grapple</button><button class="tool-button" id="weapon-tool"><span class="key">2</span> <span id="weapon-tool-label">Weapon</span></button><button class="tool-button" id="arsenal-button" aria-expanded="false" aria-controls="arsenal-panel"><span class="key">B</span> Arsenal</button></div><button class="end-turn" id="end-turn">End turn</button></div>
-  <div class="touch-controls" aria-label="Touch controls"><button data-hold="left" aria-label="Move left">←</button><button data-hold="right" aria-label="Move right">→</button><button id="touch-jump">Jump</button><button data-hold="up">Reel ↑</button><button data-hold="down" aria-label="Pay out rope">↓</button><button id="touch-hook">Hook</button></div>
+  <div class="touch-controls" id="touch-controls" aria-label="Touch controls" hidden>
+    <div class="touch-pad-wrap"><button class="touch-pad" id="touch-move" aria-label="Movement pad: left and right to move, up to reel in, down to pay out rope"><span class="touch-pad-label">MOVE / REEL</span><span class="touch-pad-directions" aria-hidden="true">↔ ↕</span><span class="touch-stick" aria-hidden="true"></span></button></div>
+    <div class="touch-actions"><button id="touch-jump" aria-label="Jump; tap twice quickly to backflip">Jump</button><button id="touch-hook">Hook</button><button id="touch-fire" aria-label="Hold to charge weapon, release to fire">Hold fire</button></div>
+    <div class="touch-pad-wrap"><button class="touch-pad" id="touch-aim" aria-label="Aim pad: drag in the direction to aim"><span class="touch-pad-label">AIM</span><span class="touch-stick" aria-hidden="true"></span></button></div>
+  </div>
   <div class="menu-backdrop" id="menu-overlay"><section class="panel menu-panel" aria-label="Game menu"><div class="menu-brand">${logo}<h1>REBATE <span>ATTACK FORCE</span></h1></div><button class="secondary-button" id="resume-button" hidden>Resume game <span>Esc</span></button><div id="play-panel"></div><div class="connection-status" id="connection-status">THE SCRAPYARD IS OPEN</div></section></div>
   <div class="match-over" id="match-over" hidden><div><div class="eyebrow">THE SCRAPYARD HAS SPOKEN</div><h2 id="winner-name"></h2><button class="primary-button" id="rematch-button">Run it back <span>↗</span></button></div></div>
 </main>
-<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Hard impacts and long falls hurt. Water is a one-way trip.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Mines arm on later turns; approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares a keyboard. Online mode gives you a private room link for 2–4 players. The host chooses each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice keeps you in control and respawns your target. These maps, frogs, and synthesized sound effects are original. Use the ♪ button to mute or enable sound.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
+<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. After firing, you have 10 seconds to retreat. Hard impacts and long falls hurt. Water is a one-way trip.</p><p class="touch-help"><strong>On your phone:</strong> use the left pad to walk and pump a swing; drag it up or down to reel the rope. Drag the right pad to aim, or tap the arena to mark a target. Tap Hook to attach and Release to let go. Tap Jump twice quickly to backflip. Choose a weapon in Arsenal, then hold Fire to charge and release to shoot. Landscape gives you a wider view.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Mines arm on later turns; approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares one device. Online mode gives you a private room link for 2–4 players. The host chooses each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice keeps you in control and respawns your target. These maps, frogs, and synthesized sound effects are original. Use the ♪ button to mute or enable sound.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -66,6 +71,10 @@ const localTeams: Record<string, TeamSettings> = {
 };
 let aim = { x: 440, y: 1400 };
 let pointer: { x: number; y: number } | null = null;
+const coarsePointer = matchMedia("(any-pointer: coarse)");
+let touchEnabled = coarsePointer.matches || navigator.maxTouchPoints > 0;
+let touchAimDirection: { x: number; y: number } | null = null;
+let canvasPointer: number | null = null;
 let camera: Camera | null = null;
 let viewport = { width: innerWidth, height: innerHeight, dpr: 1 };
 let menuOpen = false;
@@ -85,6 +94,37 @@ let previousTurn = state.turn;
 let previousSignature = "";
 const audio = new GameAudio();
 const soundDirector = new GameSoundDirector(audio);
+const touchControls = createTouchControls($("touch-controls"), {
+  onAim(direction) {
+    pointer = null;
+    touchAimDirection = direction;
+    refreshAim();
+  },
+  onJump: enterJump,
+  onHook() { setTool("grapple"); hook(); },
+  onFireStart() { setTool("weapon"); beginCharge(); },
+  onFireEnd: finishCharge,
+  onFireCancel: cancelCharge,
+});
+app.dataset.touch = String(touchEnabled);
+coarsePointer.addEventListener("change", () => setTouchEnabled(coarsePointer.matches || navigator.maxTouchPoints > 0));
+document.addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "touch" && !touchEnabled) setTouchEnabled(true);
+}, { capture: true });
+function setTouchEnabled(enabled: boolean) {
+  if (touchEnabled === enabled) return;
+  clearInputs();
+  touchEnabled = enabled;
+  app.dataset.touch = String(enabled);
+  pointer = null;
+  touchAimDirection = enabled ? defaultTouchAim() : null;
+  camera = null;
+  updateHud(true);
+}
+function defaultTouchAim() {
+  const length = Math.hypot(200, 220);
+  return { x: 200 / length, y: -220 / length };
+}
 try {
   playerName = localStorage.getItem("raf-name") || "Sprout";
   sound = localStorage.getItem("raf-sound") !== "false";
@@ -141,11 +181,12 @@ function canControl() {
   );
 }
 function input(): PlayerInput {
+  const movement = touchControls.movement;
   return {
-    left: keys.has("a") || keys.has("arrowleft"),
-    right: keys.has("d") || keys.has("arrowright"),
-    up: keys.has("w") || keys.has("arrowup"),
-    down: keys.has("s") || keys.has("arrowdown"),
+    left: !arsenalOpen && (movement.left || keys.has("a") || keys.has("arrowleft")),
+    right: !arsenalOpen && (movement.right || keys.has("d") || keys.has("arrowright")),
+    up: !arsenalOpen && (movement.up || keys.has("w") || keys.has("arrowup")),
+    down: !arsenalOpen && (movement.down || keys.has("s") || keys.has("arrowdown")),
     aimX: aim.x,
     aimY: aim.y,
   };
@@ -160,7 +201,7 @@ function syncInput() {
   else engine?.setInput(currentId(), i);
 }
 function command(c: GameCommand) {
-  if (!canControl()) return false;
+  if (!canControl() || (arsenalOpen && c.type !== "selectWeapon")) return false;
   syncInput();
   if (network) {
     network.command(c);
@@ -178,6 +219,7 @@ function hook() {
   }
 }
 function setTool(next: "grapple" | "weapon") {
+  cancelCharge();
   if (next === "weapon" && !active()?.hasCrate) {
     playSound("empty");
     announce("Your pockets are empty. Pick up a supply crate to get ammo.");
@@ -199,8 +241,10 @@ function toggleArsenal(open = !arsenalOpen) {
 function clearInputs() {
   lastEnter = -Infinity;
   keys.clear();
-  chargingAt = null;
-  $("charging").hidden = true;
+  touchControls.reset();
+  cancelCharge();
+  if (canvasPointer !== null && canvas.hasPointerCapture(canvasPointer)) canvas.releasePointerCapture(canvasPointer);
+  canvasPointer = null;
   syncInput();
 }
 function updateSound() {
@@ -259,7 +303,7 @@ function renderPanel() {
   menuOpen = false;
   syncMenu();
   if (screen === "menu") {
-    panel.innerHTML = `<div class="panel-title"><h2>Pick your trouble.</h2><span class="tiny-tag">LET’S PLAY</span></div><div class="mode-tabs" role="tablist" aria-label="Game mode">${(["practice", "local", "online"] as const).map((m) => `<button class="mode-tab ${m === selectedMode ? "active" : ""}" role="tab" aria-selected="${m === selectedMode}" data-mode="${m}">${m === "practice" ? "Practice" : m === "local" ? "Local" : "Online"}</button>`).join("")}</div><label class="input-label" for="player-name">YOUR CALLSIGN</label><input class="text-input" id="player-name" maxlength="20" value="${escapeHtml(playerName)}" autocomplete="nickname" placeholder="A perfectly normal frog"/><p class="mode-description">${selectedMode === "practice" ? "Find your swing. Try the weapons. Your patient target frog won’t hold a grudge." : selectedMode === "local" ? "Two teams. One keyboard. Take turns making life difficult for a nearby friend." : "Make a private room, send the link, and bring up to three friends. No sign-up required."}</p>${selectedMode === "local" ? settingsMarkup("p1", playerName, localTeams.p1, true) + settingsMarkup("p2", "Rusty", localTeams.p2, true) : ""}<button class="primary-button" id="start-button" ${busy ? "disabled" : ""}>${busy ? "Connecting…" : selectedMode === "practice" ? "Start practice" : selectedMode === "local" ? "Start local match" : "Create a room"} <span>↗</span></button>${selectedMode === "online" ? '<div class="join-fields"><input class="text-input" id="room-code-input" aria-label="Room code or invite link" placeholder="Have a room code?" maxlength="200"/><button id="join-button">Join</button></div>' : ""}<div class="anonymous-note">${selectedMode === "online" ? "↗ Share a link. Skip the sign-up." : "⌁ Keyboard + mouse recommended"}</div>`;
+    panel.innerHTML = `<div class="panel-title"><h2>Pick your trouble.</h2><span class="tiny-tag">LET’S PLAY</span></div><div class="mode-tabs" role="tablist" aria-label="Game mode">${(["practice", "local", "online"] as const).map((m) => `<button class="mode-tab ${m === selectedMode ? "active" : ""}" role="tab" aria-selected="${m === selectedMode}" data-mode="${m}">${m === "practice" ? "Practice" : m === "local" ? "Local" : "Online"}</button>`).join("")}</div><label class="input-label" for="player-name">YOUR CALLSIGN</label><input class="text-input" id="player-name" maxlength="20" value="${escapeHtml(playerName)}" autocomplete="nickname" placeholder="A perfectly normal frog"/><p class="mode-description">${selectedMode === "practice" ? "Find your swing. Try the weapons. Your patient target frog won’t hold a grudge." : selectedMode === "local" ? "Two teams. One device. Take turns making life difficult for a nearby friend." : "Make a private room, send the link, and bring up to three friends. No sign-up required."}</p>${selectedMode === "local" ? settingsMarkup("p1", playerName, localTeams.p1, true) + settingsMarkup("p2", "Rusty", localTeams.p2, true) : ""}<button class="primary-button" id="start-button" ${busy ? "disabled" : ""}>${busy ? "Connecting…" : selectedMode === "practice" ? "Start practice" : selectedMode === "local" ? "Start local match" : "Create a room"} <span>↗</span></button>${selectedMode === "online" ? '<div class="join-fields"><input class="text-input" id="room-code-input" aria-label="Room code or invite link" placeholder="Have a room code?" maxlength="200"/><button id="join-button">Join</button></div>' : ""}<div class="anonymous-note">${selectedMode === "online" ? "↗ Share a link. Skip the sign-up." : touchEnabled ? "⌁ Thumb controls ready · Try landscape for a wider view" : "⌁ Keyboard + mouse controls"}</div>`;
     panel.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(
       (b) =>
         (b.onclick = () => {
@@ -297,7 +341,7 @@ function renderPanel() {
     $("launch-room").onclick = () => { if (validSetup()) network?.start(); };
     $("leave-button").onclick = () => void leaveToMenu();
   } else {
-    panel.innerHTML = `<div class="panel-title"><h2>The troublemakers.</h2><span class="tiny-tag">${modeLabel()}</span></div><div class="session-title"><i class="live-dot"></i> ${network ? "Connected · server rules" : selectedMode === "practice" ? "Your very own testing ground" : "Pass the keyboard each turn"}</div><div class="roster" id="roster">${rosterMarkup()}</div><div class="weapon-card"><div class="weapon-label" id="weapon-label">YOUR STASH · UNUSED AMMO CARRIES</div><div class="weapon-name" id="weapon-name">Crate required</div><div class="weapon-note" id="weapon-note">Find a crate to get your hands on something irresponsible.</div></div>${network ? '<button class="secondary-button" id="copy-invite">Copy room link</button>' : ""}<button class="secondary-button" id="leave-button">${network ? "Leave match · forfeit team" : "Back to camp"}</button>`;
+    panel.innerHTML = `<div class="panel-title"><h2>The troublemakers.</h2><span class="tiny-tag">${modeLabel()}</span></div><div class="session-title"><i class="live-dot"></i> ${network ? "Connected · server rules" : selectedMode === "practice" ? "Your very own testing ground" : "Pass the device each turn"}</div><div class="roster" id="roster">${rosterMarkup()}</div><div class="weapon-card"><div class="weapon-label" id="weapon-label">YOUR STASH · UNUSED AMMO CARRIES</div><div class="weapon-name" id="weapon-name">Crate required</div><div class="weapon-note" id="weapon-note">Find a crate to get your hands on something irresponsible.</div></div>${network ? '<button class="secondary-button" id="copy-invite">Copy room link</button>' : ""}<button class="secondary-button" id="leave-button">${network ? "Leave match · forfeit team" : "Back to camp"}</button>`;
     $("leave-button").onclick = () => void leaveToMenu();
     if (network) $("copy-invite").onclick = copyInvite;
 
@@ -353,11 +397,13 @@ function startLocal() {
   canvas.focus();
 }
 function resetObserved() {
+  clearInputs();
   arsenalOpen = false;
   $("arsenal-panel").hidden = true;
   $("arsenal-button").setAttribute("aria-expanded", "false");
   camera = null;
   pointer = null;
+  touchAimDirection = touchEnabled ? defaultTouchAim() : null;
   aim = { x: (active()?.x ?? 220) + 200, y: (active()?.y ?? 1582) - 220 };
   previousCrates = state.crates.length;
   previousCrateIds = new Set(state.crates.map((crate) => crate.id));
@@ -496,6 +542,12 @@ function updateHud(force = false) {
   lastHud = now;
   const running = screen === "playing",
     p = active();
+  touchControls.update({
+    visible: touchEnabled && running && !menuOpen && !arsenalOpen && $("guide").hidden && state.phase !== "finished",
+    enabled: canControl() && !arsenalOpen,
+    canFire: state.phase === "playing" && !!p?.hasCrate,
+    hooked: !!p?.rope,
+  });
   $("hud").hidden = !running;
   $("match-over").hidden = !running || state.phase !== "finished";
   $("grapple-tool").classList.toggle("active", tool === "grapple");
@@ -611,48 +663,73 @@ function detectEvents() {
 }
 function updateAim(event: PointerEvent) {
   const r = canvas.getBoundingClientRect();
+  touchAimDirection = null;
   pointer = { x: (event.clientX - r.left) / r.width, y: (event.clientY - r.top) / r.height };
   refreshAim();
+  // A tap marks a world position; a released finger is not a mouse cursor.
+  if (event.pointerType === "touch") pointer = null;
 }
 function refreshAim() {
-  if (camera && pointer) aim = screenToWorld(camera, {
+  const player = active();
+  if (touchAimDirection && player) {
+    aim = { x: player.x + touchAimDirection.x * GRAPPLE_RANGE, y: player.y + touchAimDirection.y * GRAPPLE_RANGE };
+  } else if (camera && pointer) aim = screenToWorld(camera, {
     x: pointer.x * viewport.width, y: pointer.y * viewport.height,
   });
 }
-canvas.addEventListener("pointermove", updateAim);
+function beginCharge() {
+  if (!canControl() || arsenalOpen || state.phase !== "playing" || !active()?.hasCrate) return;
+  chargingAt = performance.now();
+  $("charging").hidden = false;
+}
+function cancelCharge() {
+  chargingAt = null;
+  $("charging").hidden = true;
+}
+function finishCharge() {
+  if (chargingAt === null) return;
+  const power = Math.min(1, 0.25 + (performance.now() - chargingAt) / 1100);
+  cancelCharge();
+  refreshAim();
+  if (command({ type: "fire", power })) tool = "grapple";
+}
+canvas.addEventListener("pointermove", (event) => {
+  if (!canControl() || arsenalOpen) return;
+  if (event.pointerType === "touch" && event.pointerId !== canvasPointer) return;
+  updateAim(event);
+});
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   unlockAudio();
   canvas.focus();
+  if (!canControl() || arsenalOpen || canvasPointer !== null) return;
+  canvasPointer = e.pointerId;
   updateAim(e);
-  if (!canControl()) return;
   canvas.setPointerCapture(e.pointerId);
+  // Touch players aim independently of their dedicated attack buttons.
+  if (e.pointerType === "touch") return;
   if (e.button === 2 || tool === "grapple") {
     hook();
     return;
   }
-  if (active()?.hasCrate) {
-    chargingAt = performance.now();
-    $("charging").hidden = false;
-  }
+  beginCharge();
 });
 canvas.addEventListener("pointerup", (e) => {
+  if (e.pointerId !== canvasPointer) return;
   updateAim(e);
-  if (chargingAt !== null) {
-    const power = Math.min(1, 0.25 + (performance.now() - chargingAt) / 1100);
-    chargingAt = null;
-    $("charging").hidden = true;
-    command({ type: "fire", power });
-    tool = "grapple";
-  }
+  canvasPointer = null;
+  if (e.pointerType !== "touch") finishCharge();
   if (canvas.hasPointerCapture(e.pointerId))
     canvas.releasePointerCapture(e.pointerId);
 });
-canvas.addEventListener("pointercancel", () => {
-  chargingAt = null;
-  $("charging").hidden = true;
-});
+function cancelCanvasPointer(event: PointerEvent) {
+  if (event.pointerId !== canvasPointer) return;
+  canvasPointer = null;
+  cancelCharge();
+}
+canvas.addEventListener("pointercancel", cancelCanvasPointer);
+canvas.addEventListener("lostpointercapture", cancelCanvasPointer);
 window.addEventListener("keydown", (e) => {
   if (
     e.target instanceof HTMLInputElement ||
@@ -685,7 +762,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.repeat) return;
-  if (!canControl()) return;
+  if (!canControl() || arsenalOpen) return;
   keys.add(key);
   unlockAudio();
   if (key === "1") setTool("grapple");
@@ -711,28 +788,12 @@ document.addEventListener("visibilitychange", () => {
   audio.setSuspended(document.hidden || !audioFocused);
   if (document.hidden) clearInputs();
 });
-for (const button of document.querySelectorAll<HTMLButtonElement>(
-  "[data-hold]",
-)) {
-  const key = (
-    { left: "a", right: "d", up: "w", down: "s" } as Record<string, string>
-  )[button.dataset.hold!];
-  button.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    button.setPointerCapture(e.pointerId);
-    keys.add(key);
-  });
-  button.addEventListener("pointerup", () => keys.delete(key));
-  button.addEventListener("pointercancel", () => keys.delete(key));
-}
 function enterJump() {
   const now = performance.now();
   const double = now - lastEnter <= DOUBLE_JUMP_SECONDS * 1000;
   const accepted = command({ type: double ? "backflip" : "jump" });
   lastEnter = !double && accepted ? now : -Infinity;
 }
-$("touch-jump").onclick = enterJump;
-$("touch-hook").onclick = hook;
 $("grapple-tool").onclick = () => setTool("grapple");
 $("weapon-tool").onclick = () => setTool("weapon");
 $("arsenal-button").onclick = () => toggleArsenal();
@@ -763,10 +824,12 @@ function openGuide() {
   guideReturnFocus = document.activeElement as HTMLElement;
   clearInputs();
   $("guide").hidden = false;
+  updateHud(true);
   $("close-guide").focus();
 }
 function closeGuide() {
   $("guide").hidden = true;
+  updateHud(true);
   guideReturnFocus?.focus();
 }
 $("guide-button").onclick = openGuide;
@@ -787,6 +850,26 @@ $("guide").addEventListener("keydown", (e) => {
     els[0]?.focus();
   }
 });
+// Browsers may omit a click for a second finger while the movement thumb is held.
+// Activate ordinary UI buttons on that finger's press; the pads own their events.
+const secondaryPresses = new WeakMap<HTMLButtonElement, { pointerId: number; until: number }>();
+document.addEventListener("pointerdown", (event) => {
+  if (event.pointerType !== "touch" || event.isPrimary) return;
+  const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
+  if (!button || button.disabled || button.closest(".touch-controls")) return;
+  event.preventDefault();
+  secondaryPresses.set(button, { pointerId: event.pointerId, until: performance.now() + 800 });
+  button.click();
+}, { capture: true });
+document.addEventListener("click", (event) => {
+  if (!event.isTrusted) return;
+  const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
+  const press = button && secondaryPresses.get(button);
+  if (!press || performance.now() > press.until) return;
+  if (event instanceof PointerEvent && event.pointerId !== press.pointerId) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, { capture: true });
 function frame(now: number) {
   const dt = Math.min((now - prevTime) / 1000, 0.05);
   prevTime = now;
@@ -804,7 +887,7 @@ function frame(now: number) {
     chargingAt === null ? 0.65 : Math.min(1, 0.25 + (now - chargingAt) / 1100);
   if (chargingAt !== null) $("power-fill").style.width = `${power * 100}%`;
   const renderedState = state;
-  camera = followCamera(camera, renderedState, viewport.width, viewport.height, dt);
+  camera = followCamera(camera, renderedState, viewport.width, viewport.height, dt, touchEnabled);
   refreshAim();
   const canAim = canControl();
   canvas.classList.toggle("can-aim", canAim);
@@ -826,6 +909,9 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 function resizeCanvas() {
+  clearInputs();
+  pointer = null;
+  camera = null;
   const rect = canvas.getBoundingClientRect();
   viewport = { width: rect.width, height: rect.height, dpr: Math.min(devicePixelRatio || 1, 2) };
   canvas.width = Math.round(rect.width * viewport.dpr);
@@ -850,6 +936,7 @@ Object.assign(window, {
       aim,
       viewport,
       sound: { ...audio.diagnostics },
+      controls: { touch: touchEnabled, charging: chargingAt !== null, input: input() },
       ...state,
     }),
 });

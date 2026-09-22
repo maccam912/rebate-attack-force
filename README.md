@@ -14,7 +14,7 @@ npm run dev
 Open **http://localhost:5173**. Vite and the Colyseus room server start together. The game fills the viewport, with a compact in-game HUD and a menu opened with Escape. Press F for browser fullscreen.
 
 - **Practice:** unlimited movement time, a target frog, respawns, and all 24 weapons refilled every turn.
-- **Local:** two players share one keyboard and take turns.
+- **Local:** two players share one device and take turns.
 - **Online:** create a private room, copy its invite link, and bring 1–3 friends. Everyone chooses a callsign; no accounts are involved. The host chooses each team’s frog count and starting HP, then starts the match.
 
 For friends on the same network, use the network URL printed by Vite. A localhost invite only works on your own machine. Public play needs a reachable deployment.
@@ -40,13 +40,27 @@ Each player controls a team. Before a local or online match, configure **1–6 f
 | F | Fullscreen |
 | Escape | Open / close the game menu (pauses local play) |
 
+On a phone or touch device, the game automatically shows a thumb control deck and keeps the arena above it. Rotate to **landscape** for more room to see and aim; portrait also works. The layout follows screen resizing and keeps controls clear of display cutouts and the home indicator.
+
+| Touch control | Action |
+| --- | --- |
+| Left pad | Drag left/right to walk or pump a swing; up/down reels an attached rope in/out |
+| Right pad | Drag to set your aim direction; it stays aimed relative to your frog as you move |
+| Touch the arena | Aim at that spot without attacking |
+| Jump | Tap to jump immediately; tap twice quickly for a backward jump |
+| Hook | Attach toward your aim; tap again to release |
+| Fire | Hold to charge the stocked weapon, then release to fire |
+| Arsenal / End turn / menu buttons | Choose a weapon, pass the turn, or open the menu |
+
+You can move, aim, and use an action with separate fingers. Opening the menu or arsenal or changing turns clears held controls and cancels a charged shot. An interrupted Fire touch also cancels the shot.
+
 The scrapyard spans **4,320 × 1,800 world pixels**, with 29 platforms, elevated supply routes, and a camera that follows the active frog. Edge markers point toward opponents outside the view.
 
 Aiming guides appear only while you control the active frog. Everyone can see that frog's eyes follow its aim, and frogs make an alarmed face when a living opponent comes within 160 world pixels. Jointed hind legs plant and step while walking, tuck near a jump's apex, and trail behind velocity, even during downward dives. Local spring animation adds leg flutter without affecting collisions. Fast launches widen the eyes; impacts squash the body.
 
 Ropes reach 680 world pixels and attach to any solid platform surface. They wrap around corners and unwind as you swing back. Pumping acts along the swing, reeling adds angular momentum, and release retains both tangential and inward velocity. Frogs are solid bodies: push them, land on them, or stomp from height. Explosions and melee blows launch frogs into spins; they bounce off walls, roll across floors, and follow their flight arc as the spin subsides. Ordinary jumps and backflips land safely, but long falls and hard impacts cause damage. Water still eliminates frogs.
 
-Sound starts with your first click or keypress. The ♪ button mutes all effects and remembers your preference. Footsteps follow actual ground movement; swing and rushing-air sounds grow with speed. Jumps, reeling, weapon charging and firing, explosions, ricochets, impacts, panic croaks, deaths, water splashes, respawns, pickups, mines, character changes, and the final countdown all have cues. Background tabs go quiet. Online action sounds follow the server so prediction corrections cannot replay them.
+Sound starts with your first click, touch, or keypress. The ♪ button mutes all effects and remembers your preference. Footsteps follow actual ground movement; swing and rushing-air sounds grow with speed. Jumps, reeling, weapon charging and firing, explosions, ricochets, impacts, panic croaks, deaths, water splashes, respawns, pickups, mines, character changes, and the final countdown all have cues. Background tabs go quiet. Online action sounds follow the server so prediction corrections cannot replay them.
 
 The arsenal uses one shared catalog for simulation, aiming hints, and the interface:
 
@@ -106,6 +120,7 @@ npm test
 npm run build
 # With npm run dev running in another terminal:
 npm run test:browser
+npm run test:mobile
 npm run test:audio
 # Optional local oMLX visual check, after screenshots exist:
 npm run test:visual
@@ -113,13 +128,13 @@ npm run test:visual
 
 The optional visual check uses your local oMLX vision model and a blank-image negative control; it skips when the service or a supported model is unavailable. Override with `OMLX_BASE_URL`, `OMLX_API_KEY`, and `OMLX_VISION_MODEL`.
 
-The unit suite covers deterministic simulation and checkpoint replay, latency and jitter, all weapon families, mystery pickups, saved ammunition, rope momentum, damaging impacts, body collisions, mine arming, deadlines, drowning, delayed victory, sound event delivery, movement foley, and complete matches. Integration tests use real Colyseus clients on an ephemeral local port. The browser smoke test drives two actual browser clients and saves screenshots to `test-results/`. The audio smoke test uses the Vite dev server to measure real Web Audio output and check every cue, weapon, mute/unlock controls, and audio graph cleanup.
+The unit suite covers deterministic simulation and checkpoint replay, latency and jitter, all weapon families, mystery pickups, saved ammunition, rope momentum, damaging impacts, body collisions, mine arming, deadlines, drowning, delayed victory, sound event delivery, movement foley, and complete matches. Integration tests use real Colyseus clients on an ephemeral local port. The browser smoke test drives two actual browser clients and saves screenshots to `test-results/`. The mobile smoke test sends browser touch input, including simultaneous fingers, and checks phone layouts, movement and aim, jumps, grappling, firing, and interrupted gestures. It uses Chromium touch emulation; physical-device testing is still useful for browser chrome, cutouts, and handling. The audio smoke test uses the Vite dev server to measure real Web Audio output and check every cue, weapon, mute/unlock controls, and audio graph cleanup.
 
 Browser tests use system Chrome on macOS when present. Otherwise install Chromium with `npx playwright install chromium`, or set `CHROME_PATH`. To check the production bundle served by `npm start`, use `BASE_URL=http://localhost:2567 npm run test:browser` after building.
 
 ## Scope of this first version
 
-One arena, 1–6 frogs per team, 2–4 online teams, 24 weapons, original visuals and sound effects. There is no AI opponent, terrain destruction, public matchmaking, recovery after a server restart, or support for multiple uncoordinated server replicas. Accidental disconnects keep the team alive and skip its turns. Brief drops reconnect automatically. A saved private reconnect token lets you reload or reopen the room link in the same browser and recover the same team; it is refreshed on every successful reconnection. Rejoining restores eligibility for the team’s next turn, without interrupting another team. If every team is offline, play waits; rooms are discarded after 30 minutes with nobody connected. Explicitly choosing Leave match forfeits the team and clears its saved token. Keyboard and mouse provide the intended experience; the responsive UI includes basic touch controls.
+One arena, 1–6 frogs per team, 2–4 online teams, 24 weapons, original visuals and sound effects. There is no AI opponent, terrain destruction, public matchmaking, recovery after a server restart, or support for multiple uncoordinated server replicas. Accidental disconnects keep the team alive and skip its turns. Brief drops reconnect automatically. A saved private reconnect token lets you reload or reopen the room link in the same browser and recover the same team; it is refreshed on every successful reconnection. Rejoining restores eligibility for the team’s next turn, without interrupting another team. If every team is offline, play waits; rooms are discarded after 30 minutes with nobody connected. Explicitly choosing Leave match forfeits the team and clears its saved token. Play with keyboard and mouse or the adaptive phone controls.
 
 Research and fidelity boundaries are recorded in [reference mechanics](docs/reference-mechanics.md). Weapon carryover is an intentional beginner-friendly adaptation requested for Rebate Attack Force.
 
