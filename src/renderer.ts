@@ -4,6 +4,7 @@ import { DAMAGE_APPLY_SECONDS } from "../shared/game";
 
 import type { Camera } from "./camera";
 import { FrogAnimator } from "./frog";
+import { drawHazards, drawStatusAura, drawStatusBadges, drawVisionEffects, STATUS_PRESENTATION } from "./effect-renderer";
 
 export interface RenderOptions {
   camera: Camera;
@@ -14,6 +15,8 @@ export interface RenderOptions {
   power: number;
   menu: boolean;
   reducedMotion?: boolean;
+  /** Only the client controlling the active frog receives disruptive vision effects. */
+  visionEffects?: boolean;
 }
 const ink = "#223c34";
 const animator = new FrogAnimator();
@@ -463,6 +466,7 @@ export function renderGame(
         p.y + p.h >= camera.y - 40 && p.y <= camera.y + camera.height + 40)
       platform(c, p, i, o.time);
   });
+  drawHazards(c, s, o);
   for (const box of s.crates)
     crate(
       c,
@@ -497,7 +501,7 @@ export function renderGame(
     }
     c.restore();
   }
-  const labels: { x: number; y: number; width: number }[] = [];
+  const labels: { x: number; y: number; width: number; height: number }[] = [];
   const drowned = new Set(s.resolution?.drownedPlayerIds ?? []);
   const controlling = s.phase === "playing" || s.phase === "retreat";
   for (const p of s.players) {
@@ -516,6 +520,7 @@ export function renderGame(
       c.fillStyle = "#172f3438";
       c.fill();
     }
+    drawStatusAura(c, p, o);
     drawFrog(
       c, p, o.time, 1,
       controlling && p.id === s.activePlayerId ? aim : undefined,
@@ -523,11 +528,13 @@ export function renderGame(
     );
     c.textAlign = "center";
     c.font = "800 13px 'Trebuchet MS', sans-serif";
-    const labelWidth = Math.max(50, c.measureText(p.name).width) + 10;
+    const statusCount = (p.statuses ?? []).filter((status) => status.remaining > 0).length;
+    const labelWidth = Math.max(50, c.measureText(p.name).width, Math.min(5, statusCount) * 38 / Math.max(0.7, camera.zoom)) + 10;
+    const labelHeight = statusCount ? 58 : 30;
     let labelY = p.y - 49;
     while (labels.some((label) => Math.abs(label.x - p.x) < (label.width + labelWidth) / 2 &&
-      Math.abs(label.y - labelY) < 30)) labelY -= 32;
-    labels.push({ x: p.x, y: labelY, width: labelWidth });
+      Math.abs(label.y - labelY) < Math.max(label.height, labelHeight))) labelY -= labelHeight + 2;
+    labels.push({ x: p.x, y: labelY, width: labelWidth, height: labelHeight });
     if (labelY < p.y - 49)
       line(c, [p.x, labelY + 15, p.x, p.y - 32], "#314c3d55", 1);
     text(c, p.name, p.x, labelY, 13, ink, 800);
@@ -541,8 +548,9 @@ export function renderGame(
       2,
       p.color,
     );
+    drawStatusBadges(c, p, labelY, o);
     if (p.id === s.activePlayerId && !o.menu && controlling) {
-      const ay = labelY - 16 + Math.sin(o.time * 4) * 3;
+      const ay = labelY - (p.statuses?.length ? 37 : 16) + (o.reducedMotion ? 0 : Math.sin(o.time * 4) * 3);
       poly(c, [p.x - 5, ay, p.x + 5, ay, p.x, ay + 6], "#fbf7d9");
     }
     c.textAlign = "left";
@@ -657,6 +665,43 @@ export function renderGame(
       c.strokeStyle = def.color;
       c.lineWidth = 6;
       c.stroke();
+    } else if (def.hazard) {
+      const kind = def.hazard.kind;
+      if (kind === "gravity" || kind === "repulsor" || kind === "updraft") {
+        circle(c, 0, 0, 13, `${def.color}55`);
+        circle(c, 0, 0, 8, "#293b3d");
+        c.strokeStyle = def.color;
+        c.lineWidth = 2;
+        c.stroke();
+        c.beginPath();
+        c.ellipse(0, 0, 16, 5, Math.PI / 4, 0, Math.PI * 2);
+        c.stroke();
+        line(c, [-4, 0, 4, 0], def.color, 2);
+        if (kind !== "gravity") line(c, [0, -4, 0, 4], def.color, 2);
+      } else {
+        // Contraband canisters, with recognizable wire/flame/cold contents.
+        rounded(c, -11, -7, 20, 14, 4, def.color, ink);
+        rounded(c, 7, -5, 5, 10, 1, "#e5e4c4", ink);
+        line(c, [-7, -5, -3, 5, 2, -5], "#203c3977", 2);
+        if (kind === "wire") {
+          line(c, [-12, -11, 11, 11, 11, -11, -12, 11], "#edf6e6", 1.5);
+        } else if (kind === "fire") {
+          poly(c, [-14, -3, -20, -11, -18, 1, -24, 4, -13, 5], "#ffd58f");
+        }
+      }
+    } else if (def.status) {
+      if (def.speed >= 1100) {
+        line(c, [-22, 0, 10, 0], `${def.color}66`, 9);
+        line(c, [-18, 0, 11, 0], "#fff9df", 2);
+        poly(c, [0, -5, 13, 0, 0, 5, 3, 0], def.color);
+      } else {
+        const effect = STATUS_PRESENTATION[def.status.kind];
+        circle(c, 0, 0, 12, ink);
+        circle(c, 0, 0, 10, def.color);
+        c.rotate(-Math.atan2(p.vy, p.vx));
+        c.textAlign = "center";
+        text(c, effect.glyph, 0, 4, 14, ink, 900);
+      }
     } else {
       const size = p.variant === "fragment" ? 5 : p.kind === "meteor" ? 23 : p.kind === "megaBomb" ? 15 : 8;
       circle(c, 0, 0, size + 1.5, ink);
@@ -693,6 +738,23 @@ export function renderGame(
       } else if (e.weapon === "bat") {
         rounded(c, -30, -4, 60, 8, 4, "#ae784c", ink);
         rounded(c, -2, -8, 40, 16, 7, "#e0b875", ink);
+      } else if (e.weapon === "ropeShears") {
+        const open = 0.25 + Math.sin(progress * Math.PI) * 0.35;
+        for (const side of [-1, 1]) {
+          c.save();
+          c.rotate(open * side);
+          line(c, [-20, side * 4, 30, side * 3], "#e6efdf", 5);
+          circle(c, -23, side * 5, 8, "#d09d66");
+          circle(c, -23, side * 5, 4, ink);
+          c.restore();
+        }
+        circle(c, 0, 0, 3, ink);
+      } else if (e.weapon === "glueSlap") {
+        rounded(c, -20, -7, 28, 14, 4, "#e9bf9b", ink);
+        rounded(c, 1, -15, 22, 29, 6, "#ffb3df", ink);
+        for (let finger = 0; finger < 4; finger++)
+          line(c, [12 + finger * 5, -6, 15 + finger * 5, -20 + Math.abs(1 - finger) * 4], "#ffb3df", 5);
+        circle(c, 29, 12, 3, "#ffb3df");
       } else {
         rounded(c, -21, -9, 22, 18, 4, "#f3c99b", ink);
         rounded(c, -4, -17, 30, 31, 10, "#ed7067", ink);
@@ -700,7 +762,7 @@ export function renderGame(
       }
       c.restore();
       c.textAlign = "center";
-      text(c, "WHACK!", e.x, e.y - 32 - progress * 20, 18, "#fff5cd", 900);
+      text(c, e.weapon === "ropeShears" ? "SNIP!" : e.weapon === "glueSlap" ? "SPLAT!" : "WHACK!", e.x, e.y - 32 - progress * 20, 18, "#fff5cd", 900);
       c.textAlign = "left";
     } else if (e.kind === "pull" || e.kind === "push" || e.kind === "spring") {
       for (let ring = 0; ring < 3; ring++) {
@@ -769,5 +831,6 @@ export function renderGame(
     }
   }
   c.restore();
+  drawVisionEffects(c, s, o);
   drawDamageOutcome(c, s, o);
 }

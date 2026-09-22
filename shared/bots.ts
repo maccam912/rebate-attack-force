@@ -1,5 +1,6 @@
 import { GameEngine, PLAYER_RADIUS } from "./game.js";
-import type { GameState, Platform, Player, Point, WeaponId } from "./types.js";
+import { hazardTouches, projectHazard, ropeIntersectsCircle } from "./effects.js";
+import type { ArenaHazard, GameState, Platform, Player, Point, StatusKind, WeaponId } from "./types.js";
 import { WEAPONS, type WeaponDefinition } from "./weapons.js";
 
 interface Shot {
@@ -44,16 +45,48 @@ function covered(state: GameState, a: Point, b: Point): boolean {
   });
 }
 
+const STATUS_VALUE: Record<StatusKind, number> = {
+  slippery: 12, sticky: 20, burning: 28, poisoned: 32, chilled: 22, confused: 16,
+  dazzled: 15, pixelated: 15, inverted: 24, heavy: 18, feather: 16, bouncy: 18,
+};
+
+function statusScore(player: Player, weapon: WeaponDefinition): number {
+  if (!weapon.status) return 0;
+  const existing = player.statuses?.find((status) => status.kind === weapon.status!.kind)?.remaining ?? 0;
+  // Refreshing an almost-full debuff should not crowd out a useful different shot.
+  const extension = clamp((weapon.status.duration - existing) / weapon.status.duration, 0, 1);
+  return STATUS_VALUE[weapon.status.kind] * extension;
+}
+
+function previewHazard(state: GameState, point: Point, weapon: WeaponDefinition): ArenaHazard | null {
+  if (!weapon.hazard) return null;
+  const placement = projectHazard(point, weapon.hazard.kind, weapon.hazard.radius, state.platforms, state.waterY);
+  if (!placement) return null;
+  return { id: "preview", ...placement, kind: weapon.hazard.kind,
+    remainingTurns: weapon.hazard.turns, createdTurn: state.turn, weapon: weapon.id, hitPlayerIds: [] };
+}
+
 function blastScore(state: GameState, shooter: Player, point: Point, weapon: WeaponDefinition, immuneId?: string): number {
   let score = 0;
+  const hazard = previewHazard(state, point, weapon);
+  const hazardOrigin = hazard && { x: hazard.x,
+    y: hazard.y - (["gravity", "repulsor", "updraft"].includes(hazard.kind) ? 0 : 6) };
   for (const player of state.players) {
     if (!player.alive || player.id === immuneId) continue;
     const separation = distance(player, point);
-    if (separation > weapon.radius + PLAYER_RADIUS) continue;
-    const force = 1 - separation / (weapon.radius + PLAYER_RADIUS);
-    const damage = weapon.damage * (0.28 + force * 0.72) * (covered(state, point, player) ? 0.4 : 1);
-    // A modest value for a shove lets non-damaging equipment remain useful.
-    const value = Math.min(player.hp, damage) + force * weapon.impulse / 180;
+    let value = 0;
+    if (separation <= weapon.radius + PLAYER_RADIUS) {
+      const force = 1 - separation / (weapon.radius + PLAYER_RADIUS);
+      const occluded = covered(state, point, player);
+      const damage = weapon.damage * (0.28 + force * 0.72) * (occluded ? 0.4 : 1);
+      value += Math.min(player.hp, damage) + force * weapon.impulse / 180;
+      if (!occluded) value += statusScore(player, weapon);
+    }
+    if (hazard && hazardTouches(hazard, player) && !covered(state, hazardOrigin!, player)) {
+      const force = clamp(1 - distance(player, hazard) / (hazard.radius + PLAYER_RADIUS), 0, 1);
+      value += (weapon.hazard!.kind === "wire" ? 24 : 18) * (0.5 + force * 0.5);
+    }
+    if (weapon.cutsRopes && ropeIntersectsCircle(player, point, weapon.radius)) value += 20;
     score += value * (player.teamId === shooter.teamId ? -1.8 : 1);
   }
   return score;
@@ -124,7 +157,8 @@ function chooseShot(state: GameState, shooter: Player, enemies: Player[]): Shot 
           const px = player.x - shooter.x, py = player.y - shooter.y, separation = Math.hypot(px, py);
           if (!player.alive || player.id === shooter.id || separation > weapon.range + PLAYER_RADIUS ||
             (px * dx + py * dy) / Math.max(1, separation * length) < 0.5 || covered(state, shooter, player)) continue;
-          score += (weapon.damage + weapon.impulse / 180) * (player.teamId === shooter.teamId ? -1.8 : 1);
+          score += (weapon.damage + weapon.impulse / 180 + statusScore(player, weapon) +
+            (weapon.cutsRopes && player.rope ? 20 : 0)) * (player.teamId === shooter.teamId ? -1.8 : 1);
         }
         consider(weapon, target, 1, score);
       } else if (weapon.attack === "blast") {

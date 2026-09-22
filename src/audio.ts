@@ -1,4 +1,5 @@
 import type { WeaponId } from "../shared/types";
+import { WEAPON_CATALOG } from "../shared/weapons";
 
 export type SoundName =
   | "ui" | "jump" | "backflip" | "grapple" | "release" | "land" | "bounce"
@@ -216,7 +217,9 @@ export class GameAudio {
           this.weapon(voice, options.weapon ?? "rocket");
           break;
         case "explosion":
-          if (options.weapon === "gust") {
+          if (options.weapon && this.effectWeapon(voice, options.weapon, true, intensity)) {
+            // Persistent fields and status weapons have material-specific impact sounds.
+          } else if (options.weapon === "gust") {
             this.noise(voice, 0, 0.32, 2100, 450, 0.25, 0.5);
           } else if (options.weapon === "pulse") {
             this.vowel(voice, 0, 0.2, 120, 65, 330, 850, 0.17);
@@ -453,7 +456,93 @@ export class GameAudio {
     });
   }
 
+  /** Shared effect metadata gives future weapons a matching sound without another ID switch. */
+  private effectWeapon(voice: Voice, weapon: WeaponId, impact = false, intensity = 0.65): boolean {
+    const definition = WEAPON_CATALOG[weapon];
+    const effect = definition.hazard?.kind ?? definition.status?.kind ?? (definition.cutsRopes ? "wire" : undefined);
+    if (!effect) return false;
+    const duration = impact ? 0.48 : 0.25;
+    const level = impact ? 0.18 + intensity * 0.045 : 0.17;
+    // Rays have a higher register than the corresponding thrown environmental hazard.
+    const register = definition.hazard ? 1 : 1.35;
+    switch (effect) {
+      case "oil": case "slippery":
+        this.boing(voice, 0, duration, 310 * register, impact ? 65 : 530, level);
+        this.noise(voice, 0, duration * 0.7, 1050, 280, level * 0.8, 1.6);
+        this.tone(voice, 0.06, 0.14, 520, 150, level * 0.6);
+        break;
+      case "ice": case "chilled":
+        this.noise(voice, 0, duration * 0.55, 4800, 1800, level, 2);
+        this.chime(voice, impact ? [1480, 1110, 830] : [830, 1110, 1660], 0.035, duration, level * 0.45);
+        break;
+      case "glue": case "sticky":
+        this.tone(voice, 0, duration, 780 * register, impact ? 65 : 130, level);
+        this.noise(voice, 0, duration * 0.65, 1300, 260, level * 0.85, 2.5);
+        this.boing(voice, 0.06, duration * 0.6, 190, 430, level * 0.45);
+        break;
+      case "wire":
+        this.noise(voice, 0, 0.065, 4700, 1700, level, 2.2);
+        this.noise(voice, 0.08, 0.06, 3600, 1000, level * 0.75, 2.2);
+        this.chime(voice, impact ? [1310, 1777, 2161] : [1777, 1310], 0.035, duration, level * 0.35);
+        break;
+      case "fire": case "burning":
+        this.noise(voice, 0, duration, impact ? 3700 : 900, impact ? 430 : 3100, level * 1.5, 0.5);
+        this.tone(voice, 0, duration * 0.7, 140 * register, 45, level * 0.75);
+        for (let i = 0; i < 3; i++) this.noise(voice, i * 0.085, 0.055, 2900, 1100, level * 0.45, 1.8);
+        break;
+      case "poison": case "poisoned":
+        this.noise(voice, 0, duration, 950, 2600, level, 1.8);
+        for (let i = 0; i < 3; i++) this.tone(voice, i * 0.065, duration * 0.5, (210 + i * 83) * register, 580 - i * 110, level * 0.65);
+        break;
+      case "gravity": case "heavy":
+        this.tone(voice, 0, duration + 0.12, impact ? 220 : 70, impact ? 36 : 260, level, "triangle");
+        this.tone(voice, 0.02, duration, impact ? 237 : 76, impact ? 40 : 287, level * 0.6);
+        this.noise(voice, 0, duration, 1600, 180, level * 0.85);
+        break;
+      case "repulsor":
+        this.tone(voice, 0, duration, 90, impact ? 740 : 470, level, "triangle");
+        this.tone(voice, 0.035, duration, 135, impact ? 1110 : 705, level * 0.5);
+        this.noise(voice, 0, duration, 330, 2500, level * 1.15, 0.6);
+        break;
+      case "updraft": case "feather":
+        this.noise(voice, 0, duration + 0.12, 480, 3200, level, 0.5);
+        this.chime(voice, impact ? [490, 660, 880] : [660, 990], 0.055, duration, level * 0.35);
+        break;
+      case "spring": case "bouncy":
+        this.boing(voice, 0, duration + 0.1, impact ? 130 : 230, impact ? 930 : 700, level * 1.2);
+        this.noise(voice, 0, 0.07, 1200, 460, level * 0.65);
+        break;
+      case "confused":
+        this.chime(voice, impact ? [510, 643, 485, 727] : [727, 510, 643], 0.065, duration, level * 0.5);
+        this.boing(voice, 0, duration, 210, 370, level * 0.5);
+        break;
+      case "dazzled":
+        this.noise(voice, 0, 0.085, 4200, 1400, level * 1.2, 0.6);
+        this.chime(voice, [1320, 1660, 1980], 0.025, duration, level * 0.28);
+        break;
+      case "pixelated":
+        for (const [i, note] of [660, 330, 990, 495, 1320].entries()) {
+          this.tone(voice, i * 0.043, 0.07, note, note, level * 0.45, "square");
+        }
+        break;
+      case "inverted":
+        this.tone(voice, 0, duration, 230, 980, level * 0.8, "triangle");
+        this.tone(voice, 0, duration, 980, 230, level * 0.6, "triangle");
+        this.noise(voice, 0, duration * 0.45, 1800, 430, level * 0.6);
+        break;
+    }
+    if (definition.hazard && definition.status) {
+      // Combination weapons retain their additional status identity over the field sound.
+      this.chime(voice, [610, 773, 517], 0.055, duration * 0.8, level * 0.32);
+    }
+    if (definition.cutsRopes && effect !== "wire") {
+      this.noise(voice, 0.025, 0.06, 4400, 1400, level * 0.8, 2);
+    }
+    return true;
+  }
+
   private weapon(voice: Voice, weapon: WeaponId): void {
+    if (this.effectWeapon(voice, weapon)) return;
     switch (weapon) {
       case "pulse":
         this.vowel(voice, 0, 0.34, 110, 45, 400, 950, 0.37);

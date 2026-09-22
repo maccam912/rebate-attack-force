@@ -67,8 +67,10 @@ try {
   assert.equal(await local.locator("#menu-overlay").isVisible(), false);
   await local.keyboard.press("b");
   assert.equal(await local.locator("#arsenal-panel").isVisible(), true);
-  assert.equal(await local.locator("#inventory [data-weapon]").count(), 24);
-  assert.equal(await local.locator(".arsenal-group").count(), 6);
+  const catalogCount = Object.keys(s.players[0].inventory).length;
+  assert.ok(catalogCount >= 48);
+  assert.equal(await local.locator("#inventory [data-weapon]").count(), catalogCount);
+  assert.ok(await local.locator(".arsenal-group").count() >= 9);
   await local.screenshot({ path: "test-results/09-arsenal.png", fullPage: true });
   await local.click('[data-weapon="golf"]');
   assert.equal((await snapshot(local)).players[0].weapon, "golf");

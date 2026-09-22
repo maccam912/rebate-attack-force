@@ -9,9 +9,10 @@ import type {
   TeamSettings,
 } from "../shared/types";
 import { renderGame } from "./renderer";
+import { HAZARD_PRESENTATION, STATUS_PRESENTATION } from "./effect-renderer";
 import { followCamera, screenToWorld, type Camera } from "./camera";
 import { RoomConnection, savedSeat, type LobbyState } from "./network";
-import { WEAPONS, WEAPON_CATALOG } from "../shared/weapons";
+import { WEAPONS, WEAPON_CATALOG, type WeaponDefinition } from "../shared/weapons";
 import type { ServerState } from "../shared/protocol";
 import { GameAudio, type SoundName } from "./audio";
 import { GameSoundDirector } from "./game-audio";
@@ -31,10 +32,10 @@ app.innerHTML = `
     <button class="icon-button" id="reset-button" title="Restart local match" aria-label="Restart local match">↻</button>
     <button class="icon-button" id="fullscreen-button" title="Fullscreen (F)" aria-label="Toggle fullscreen">⛶</button>
   </div>
-  <div class="hud" id="hud" hidden><div><div class="turn-player" id="turn-player"></div><div class="turn-caption" id="turn-caption"></div></div><div class="timer" id="timer"></div></div>
+  <div class="hud" id="hud" hidden><div><div class="turn-player" id="turn-player"></div><div class="turn-caption" id="turn-caption"></div><div class="active-statuses" id="active-statuses" aria-label="Active frog effects" hidden></div></div><div class="timer" id="timer"></div></div>
   <div class="objective-toast" id="objective-toast"></div>
   <div class="charging-indicator" id="charging" hidden>SHOT POWER<div class="power-meter"><div id="power-fill"></div></div></div>
-  <section class="arsenal-panel" id="arsenal-panel" aria-label="Weapon arsenal" hidden><div class="arsenal-heading"><div><div class="eyebrow">DEPARTMENT OF BAD IDEAS</div><h2>Pick your trouble.</h2></div><button class="icon-button" id="close-arsenal" aria-label="Close arsenal">×</button></div><p class="arsenal-intro">One attack per turn. Hold to charge; release to cause problems.</p><div class="inventory" id="inventory"></div><div class="arsenal-footer">Crates resupply your stash · Impacts add up · B to close</div></section>
+  <section class="arsenal-panel" id="arsenal-panel" role="dialog" aria-modal="true" aria-label="Weapon arsenal" hidden><div class="arsenal-heading"><div><div class="eyebrow">DEPARTMENT OF BAD IDEAS</div><h2>Pick your trouble.</h2></div><button class="icon-button" id="close-arsenal" aria-label="Close arsenal">×</button></div><p class="arsenal-intro">${WEAPONS.length} ways to cause problems. One attack per turn.</p><div class="arsenal-filters"><label class="arsenal-search"><span class="sr-only">Search weapons and effects</span><input type="search" id="arsenal-search" placeholder="Search weapons or effects…" autocomplete="off" aria-controls="inventory" /></label><label><span class="sr-only">Weapon category</span><select id="arsenal-category" aria-controls="inventory"><option value="all">All categories</option>${[...new Set(WEAPONS.map((w) => w.category))].map((category) => `<option value="${category}">${category}</option>`).join("")}</select></label></div><div class="arsenal-results" id="arsenal-results" role="status" aria-live="polite"></div><div class="inventory" id="inventory"></div><div class="arsenal-footer">Crates resupply your stash · Impacts add up · B to close</div></section>
   <div class="arena-bottom"><div class="toolbelt"><button class="tool-button active" id="grapple-tool"><span class="key">1</span> Grapple</button><button class="tool-button" id="weapon-tool"><span class="key">2</span> <span id="weapon-tool-label">Weapon</span></button><button class="tool-button" id="arsenal-button" aria-expanded="false" aria-controls="arsenal-panel"><span class="key">B</span> Arsenal</button></div><button class="end-turn" id="end-turn">End turn</button></div>
   <div class="touch-controls" id="touch-controls" aria-label="Touch controls" hidden>
     <div class="touch-pad-wrap"><button class="touch-pad" id="touch-move" aria-label="Movement pad: left and right to move, up to reel in, down to pay out rope"><span class="touch-pad-label">MOVE / REEL</span><span class="touch-pad-directions" aria-hidden="true">↔ ↕</span><span class="touch-stick" aria-hidden="true"></span></button></div>
@@ -44,7 +45,7 @@ app.innerHTML = `
   <div class="menu-backdrop" id="menu-overlay"><section class="panel menu-panel" aria-label="Game menu"><div class="menu-brand">${logo}<h1>REBATE <span>ATTACK FORCE</span></h1></div><button class="secondary-button" id="resume-button" hidden>Resume game <span>Esc</span></button><div id="play-panel"></div><div class="connection-status" id="connection-status">THE SCRAPYARD IS OPEN</div></section></div>
   <div class="match-over" id="match-over" hidden><div><div class="eyebrow">THE SCRAPYARD HAS SPOKEN</div><h2 id="winner-name"></h2><button class="primary-button" id="rematch-button">Run it back <span>↗</span></button></div></div>
 </main>
-<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. Retreat while your shot travels or its fuse burns. A melee hit or explosion ends your control, and the camera follows the fallout. Damage adds up through launches, collisions, and wall hits, then appears one frog at a time after everyone settles. Knocked-out frogs burst and can start another chain reaction. Your own movement and landings are safe; water is a one-way trip.</p><p class="touch-help"><strong>On your phone:</strong> use the left pad to walk and pump a swing; drag it up or down to reel the rope. Drag the right pad to aim, or tap the arena to mark a target. Tap Hook to attach and Release to let go. Tap Jump twice quickly to backflip. Choose a weapon in Arsenal, then hold Fire to charge and release to shoot. Landscape gives you a wider view.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for 24 weapons: rockets, cluster bananas, golf clubs, mines, air strikes, and more. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Deployed mines arm on later turns; starting mines are armed from turn one. Approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares one device, with humans or AI bots. Online mode gives you a private room link; the server sets its team capacity. The host can add bots, seed the level with mines, and choose each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p>Practice returns control to you after the fallout and respawns knocked-out frogs. These maps, frogs, and synthesized sound effects are original. Use the ♪ button to mute or enable sound.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
+<div class="dialog-backdrop" id="guide" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button class="dialog-close" id="close-guide" aria-label="Close guide">×</button><div class="eyebrow">SCRAPYARD SURVIVAL MANUAL</div><h2 id="guide-title">A tongue is all you need.<br>Until it isn’t.</h2><p>Last team standing wins. Each team rotates through its living frogs. Every frog starts with a full arsenal. You get 45 seconds to move, gather supplies, and fire one weapon. Unused ammo carries over, so a stocked frog can attack without finding another crate. Retreat while your shot travels or its fuse burns. A melee hit or explosion ends your control, and the camera follows the fallout. Damage adds up through launches, collisions, and wall hits, then appears one frog at a time after everyone settles. Knocked-out frogs burst and can start another chain reaction. Your own movement and landings are safe; water is a one-way trip.</p><p class="touch-help"><strong>On your phone:</strong> use the left pad to walk and pump a swing; drag it up or down to reel the rope. Drag the right pad to aim, or tap the arena to mark a target. Tap Hook to attach and Release to let go. Tap Jump twice quickly to backflip. Choose a weapon in Arsenal, then hold Fire to charge and release to shoot. Landscape gives you a wider view.</p><div class="guide-grid"><div class="guide-item"><strong>01 / Get moving</strong>A / D to walk and pump a swing. Enter to jump. Press Enter twice quickly for a higher backward jump. W, ↑, and Shift also jump on the ground. W / S to shorten or extend an attached rope.</div><div class="guide-item"><strong>02 / Find your arc</strong>Aim at any platform and click or press Space. Press again to let go. Hooks reach 680px. Ropes wrap around corners and unwind as you swing back. Keep your speed when you release.</div><div class="guide-item"><strong>03 / Make a delivery</strong>Press B for ${WEAPONS.length} weapons. Search by name or effect, or filter by category. Rockets, oil slicks, razor wire, gravity wells, glitch bombs: pick your trouble. Choose one, press 2, aim, hold to charge, then release. Mystery crates contain a random weapon revealed only when collected.</div><div class="guide-item"><strong>04 / Bring your friends</strong>Frogs are solid: push, stomp, bounce, and roll. Deployed mines arm on later turns; starting mines are armed from turn one. Approaching one with the active frog starts its warning fuse. Air support drops into the aimed column; roofs offer cover. Local mode shares one device, with humans or AI bots. Online mode gives you a private room link; the server sets its team capacity. The host can add bots, seed the level with mines, and choose each team’s frog count and HP before starting. Disconnected teams skip their turns; reopen the room link in the same browser to rejoin.</div></div><p><strong>Read the effects:</strong> ground patches and force fields show their remaining turn changes. Badges above a frog count down its remaining seconds of control; effects wait through other frogs’ turns. Oil and ice are slippery, glue slows movement, wire severs exposed ropes, and fire and poison keep hurting. Gravity fields pull, repel, or lift. Vision weapons affect the hit frog’s view; the HUD and controls remain readable. Reduced-motion settings soften these effects.</p><p>Practice returns control to you after the fallout and respawns knocked-out frogs. These maps, frogs, and synthesized sound effects are original. Use the ♪ button to mute or enable sound.</p><button class="primary-button" id="guide-done">Got it. Let’s make trouble. <span>↗</span></button></section></div><div class="global-toast" id="global-toast" role="status" aria-live="polite"></div>`;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -88,6 +89,8 @@ let camera: Camera | null = null;
 let viewport = { width: innerWidth, height: innerHeight, dpr: 1 };
 let menuOpen = false;
 let arsenalOpen = false;
+let arsenalQuery = "";
+let arsenalCategory = "all";
 const keys = new Set<string>();
 let chargingAt: number | null = null;
 let toastTimer = 0;
@@ -253,6 +256,13 @@ function toggleArsenal(open = !arsenalOpen) {
   if (arsenalOpen) $("close-arsenal").focus();
   else canvas.focus();
   updateHud(true);
+}
+function weaponEffectDetails(weapon: WeaponDefinition): string[] {
+  const details: string[] = [];
+  if (weapon.hazard) details.push(`${HAZARD_PRESENTATION[weapon.hazard.kind].label.toLowerCase()} · ${weapon.hazard.turns} turns`);
+  if (weapon.status) details.push(`${STATUS_PRESENTATION[weapon.status.kind].label} · ${weapon.status.duration}s`);
+  if (weapon.cutsRopes) details.push("Cuts ropes");
+  return details;
 }
 function clearInputs() {
   lastEnter = -Infinity;
@@ -429,6 +439,37 @@ $("inventory").onclick = (event) => {
     updateHud(true);
   }
 };
+$("arsenal-search").addEventListener("input", (event) => {
+  arsenalQuery = (event.target as HTMLInputElement).value.trim().toLowerCase();
+  updateHud(true);
+});
+$("arsenal-category").addEventListener("change", (event) => {
+  arsenalCategory = (event.target as HTMLSelectElement).value;
+  updateHud(true);
+});
+$("arsenal-panel").addEventListener("keydown", (event) => {
+  // Native Enter/Space activation and typing must not trigger arena shortcuts.
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleArsenal(false);
+  } else if (event.key.toLowerCase() === "b" && !(event.target instanceof HTMLInputElement) &&
+      !(event.target instanceof HTMLSelectElement)) {
+    event.preventDefault();
+    toggleArsenal(false);
+  } else if (event.key === "Tab") {
+    const focusable = [...$("arsenal-panel").querySelectorAll<HTMLElement>("button:not(:disabled), input, select")];
+    const first = focusable[0], last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
+  }
+});
 function syncMenu() {
   $("menu-overlay").hidden = screen === "playing" && !menuOpen;
   $("resume-button").hidden = screen !== "playing";
@@ -646,6 +687,17 @@ function updateHud(force = false) {
     return;
   }
   if (!p) return;
+  const statuses = (p.statuses ?? []).filter((status) => status.remaining > 0);
+  const statusSignature = statuses.map((status) => `${status.kind}:${Math.ceil(status.remaining)}`).join("|");
+  const statusList = $("active-statuses");
+  statusList.hidden = !statuses.length;
+  if (statusList.dataset.signature !== statusSignature) {
+    statusList.dataset.signature = statusSignature;
+    statusList.innerHTML = statuses.map((status) => {
+      const effect = STATUS_PRESENTATION[status.kind];
+      return `<span class="status-chip" style="--effect-color:${effect.color}" title="${escapeHtml(effect.hint)} · ${Math.ceil(status.remaining)} seconds of this frog’s control"><span aria-hidden="true">${effect.glyph}</span> ${effect.label} <b>${Math.ceil(status.remaining)}s</b></span>`;
+    }).join("");
+  }
   const reveal = state.phase === "damage" ? state.resolution?.reveal : null;
   const outcomePlayer = reveal && state.players.find((frog) => frog.id === reveal.playerId);
   const resolving = state.phase === "settling" || state.phase === "damage";
@@ -710,13 +762,18 @@ function updateHud(force = false) {
         ? "You’ve got a few seconds to make yourself scarce."
         : "Find a crate to get your hands on something irresponsible.";
     const inv = p.inventory;
-    const invSignature = `${p.id}:${p.weapon}:${WEAPONS.map((w) => inv[w.id]).join(":")}:${canControl()}:${state.phase}`;
+    const invSignature = `${p.id}:${p.weapon}:${WEAPONS.map((w) => inv[w.id]).join(":")}:${canControl()}:${state.phase}:${arsenalQuery}:${arsenalCategory}`;
     const inventory = $("inventory");
     if (inventory && inventory.dataset.signature !== invSignature) {
       inventory.dataset.signature = invSignature;
-      inventory.innerHTML = [...new Set(WEAPONS.map((w) => w.category))].map((category) =>
-        `<section class="arsenal-group"><h3>${category}</h3><div class="arsenal-grid">${WEAPONS.filter((w) => w.category === category).map((w) =>
-          `<button class="ammo-slot ${p.weapon === w.id ? "selected" : ""}" data-weapon="${w.id}" aria-pressed="${p.weapon === w.id}" title="${escapeHtml(w.description)}" aria-label="Select ${escapeHtml(w.name)}, ${inv[w.id]} rounds" ${!canControl() || state.phase !== "playing" || inv[w.id] <= 0 ? "disabled" : ""}><span class="weapon-icon" style="color:${w.color}">${w.icon}</span><span class="ammo-copy"><strong>${escapeHtml(w.name)}</strong><small>${escapeHtml(w.description)}</small></span><b class="ammo-count">${inv[w.id]}</b></button>`).join("")}</div></section>`).join("");
+      const matches = WEAPONS.filter((w) => (arsenalCategory === "all" || w.category === arsenalCategory) &&
+        `${w.name} ${w.description} ${w.category} ${weaponEffectDetails(w).join(" ")}`.toLowerCase().includes(arsenalQuery));
+      $("arsenal-results").textContent = `${matches.length} of ${WEAPONS.length} weapons · effects count down on the victim’s turn`;
+      inventory.innerHTML = matches.length ? [...new Set(matches.map((w) => w.category))].map((category) =>
+        `<section class="arsenal-group"><h3>${category} <span>${matches.filter((w) => w.category === category).length}</span></h3><div class="arsenal-grid">${matches.filter((w) => w.category === category).map((w) => {
+          const effects = weaponEffectDetails(w);
+          return `<button class="ammo-slot ${p.weapon === w.id ? "selected" : ""}" data-weapon="${w.id}" aria-pressed="${p.weapon === w.id}" title="${escapeHtml(w.description)}" aria-label="Select ${escapeHtml(w.name)}, ${inv[w.id] ?? 0} rounds${effects.length ? `, ${escapeHtml(effects.join(", "))}` : ""}" ${!canControl() || state.phase !== "playing" || !(inv[w.id] > 0) ? "disabled" : ""}><span class="weapon-icon" style="color:${w.color}" aria-hidden="true">${w.icon}</span><span class="ammo-copy"><strong>${escapeHtml(w.name)}</strong><small>${escapeHtml(w.description)}</small>${effects.length ? `<span class="weapon-effects">${effects.map((effect) => `<span>${escapeHtml(effect)}</span>`).join("")}</span>` : ""}</span><b class="ammo-count">${inv[w.id] ?? 0}</b></button>`;
+        }).join("")}</div></section>`).join("") : '<p class="arsenal-empty">No weapons match. Try an effect like “gravity”, “rope”, or “poison”.</p>';
     }
   }
   if (state.phase === "finished") {
@@ -1003,6 +1060,7 @@ function frame(now: number) {
     power,
     menu: screen !== "playing",
     reducedMotion: reducedMotion.matches,
+    visionEffects: canAim && !arsenalOpen,
   });
   soundDirector.update(renderedState, dt, {
     audible: soundAudible(), listener: soundListener(),

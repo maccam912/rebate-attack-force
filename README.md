@@ -13,7 +13,7 @@ npm run dev
 
 Open **http://localhost:5173**. Vite and the Colyseus room server start together. The game fills the viewport, with a compact in-game HUD and a menu opened with Escape. Press F for browser fullscreen.
 
-- **Practice:** unlimited movement time, a target frog, respawns, and all 24 weapons refilled every turn.
+- **Practice:** unlimited movement time, a target frog, respawns, and all 48 weapons refilled every turn.
 - **Local:** share one device and take turns, or choose an AI bot as your opponent. Add more human or bot teams in the setup screen.
 - **Online:** create a private room, copy its invite link, and bring friends or use **Add bot** to play alone. Everyone chooses a callsign; no accounts are involved. The host adds/removes bots, chooses each team’s frog count and starting HP, and sets the number of starting mines before starting the match. The server operator can configure room capacity; there is no fixed four-team limit.
 
@@ -27,7 +27,7 @@ Each player controls a team. Before a local or online match, configure **1–6 f
 
 After impact, everyone loses control while the camera follows the weapon and flying frogs, widening to show collisions. Brief slow motion and subtle shake accent big hits. Damage accumulates without reducing HP or removing lethally hit frogs from the physics. Once bodies and live weapons settle, the camera visits each damaged frog, pauses, and shows its HP being subtracted. Knocked-out frogs explode for a little nearby damage and knockback; any resulting mayhem settles and gets its own outcome before the turn changes. Water eliminations are also shown before victory or practice respawns.
 
-**Every frog starts with all 24 weapons and limited ammunition. Unused ammunition carries across turns.** Mystery crates resupply a randomly chosen weapon; every box looks identical and its contents are revealed only after pickup. You may collect multiple crates and select any stocked weapon. Carrying a weapon lets you attack on a later turn without finding another crate. The one-shot limit still applies.
+**Every frog starts with all 48 weapons and limited ammunition. Unused ammunition carries across turns.** Mystery crates resupply a randomly chosen weapon; every box looks identical and its contents are revealed only after pickup. You may collect multiple crates and select any stocked weapon. Carrying a weapon lets you attack on a later turn without finding another crate. The one-shot limit still applies.
 
 | Control | Action |
 | --- | --- |
@@ -70,14 +70,34 @@ The arsenal uses one shared catalog for simulation, aiming hints, and the interf
 
 | Family | Weapons |
 | --- | --- |
-| Launchers | Rebate Rocket, Salt Shaker, Complaint Department, Lob Goblin, Grand Finale |
+| Launchers | Rebate Rocket, Salt Shaker, Complaint Department, Lob Goblin, Grand Finale, Spicy Feedback, Poisoned Pen |
 | Bombs | Pocket Grenade, Demolition Melon, Confetti Cluster, Banana Split, Chewing Boom |
-| Melee | Nine-Irony, Home Run, Express Delivery |
+| Melee | Nine-Irony, Home Run, Express Delivery, Sticky Handshake, Severance Package |
 | Traps | Personal Space Mine, Unwelcome Mat |
 | Air support | Special Delivery, Extinction Event, Gravity's Invoice |
-| Oddities | Sonic Burp, Rubber Ruin, Debt Collector, Industrial Hairdryer, Disco Inferno, Return to Sender |
+| Oddities | Sonic Burp, Rubber Ruin, Debt Collector, Industrial Hairdryer, Disco Inferno, Return to Sender, Eel Deal, Elastic Clause, Unscheduled Everything |
+| Hazards | Liquid Liability, Black Ice Special, Industrial Adhesive, Red Tape, Hotline Complaint, Toxic Workplace, Bounce Check |
+| Gravity | Hostile Takeover, Personal Space Bubble, Corporate Uplift, Crushing Responsibility, Light Duty |
+| Disruption | Cold Shoulder, Reverse Psychology, Mandatory Brightness, Compression Artifact, Meeting That Could Be Email |
 
 These have different trajectories, fuses, reach, recoil, fragmentation, bounce, and launch forces. Sticky bombs attach to terrain or frogs; the boomerang curves back toward its owner; vacuum blasts pull; the hairdryer pushes without direct damage. Melee requires line of sight. Air support enters from above the aimed column and strikes the first obstruction. Terrain reduces blast damage and radial force.
+
+Weapons can now change the arena and leave effects on individual frogs:
+
+| Effect | What changes |
+| --- | --- |
+| Oil and ice | Slippery ground preserves momentum; ice also chills visitors. |
+| Glue | Sticky ground or an adhesive hit slows movement and weakens jumps. |
+| Barbed wire and scissors | Wire hurts visitors and severs ropes that cross it; Severance Package cuts exposed rope segments within its reach. Bent ropes are checked along every segment. |
+| Fire and poison | Lingering damage runs only during the affected frog's control time. |
+| Gravity fields | Gravity wells pull, repulsors push, and updrafts lift the active frog. |
+| Trampolines and rubber | Trampolines launch visitors; Elastic Clause makes the affected frog bounce harder off terrain. |
+| Heavy and featherweight | Crushing Responsibility increases gravity and hinders movement; Light Duty lowers gravity. |
+| Cold and reversed controls | Cold Shoulder weakens movement and jumps; Reverse Psychology reverses movement and rope reeling. |
+| Visual disruption | Glare, pixelation, and colorful distortion affect the view while a hit frog has control. |
+| Combination attacks | Unscheduled Everything cuts ropes, distorts victims' vision, and leaves a gravity well. |
+
+Surface hazards land on reachable platform tops, while gravity wells, repulsors, and updrafts float where deployed. Cover blocks status application and hazard influence. Hazards persist for the number of turn changes shown in their weapon description and affect the active frog, including the owner on later turns. Damaging patches and trampoline launches trigger at most once per frog per turn; wire continues checking ropes. Status timers and periodic damage advance only during the affected frog's movement and retreat time, so a hit on an inactive opponent keeps its effect for that frog's next turn. Status effects and hazards remain part of the authoritative simulation online.
 
 **Starting mines:** in local setup or the online lobby, choose **0–50 mines** to scatter across the level (default: 0). Only the online host can change this setting, and it is fixed when the match starts. Starting mines sit on platforms away from the frogs’ spawn positions and are armed from turn one. Crowded levels may contain fewer mines if there is not enough safe space. Restarting keeps the chosen count and scatters a fresh set.
 
@@ -110,12 +130,14 @@ See [deployment instructions](docs/deployment.md) for ingress, TLS, health probe
 - `shared/bots.ts`: shared AI controller for local and server-controlled bot teams.
 - `server/AttackRoom.ts`: authoritative Colyseus room; validates and rate-limits client inputs, steps the simulation, broadcasts snapshots.
 - `shared/physics.ts`: shared impulse, impact, angular attitude, and velocity rules.
-- `shared/weapons.ts`: 24-weapon catalog, ballistics, loadouts, and display metadata.
+- `shared/weapons.ts`: 48-weapon catalog, ballistics, loadouts, status/hazard definitions, and display metadata.
+- `shared/effects.ts`: shared condition refresh, hazard placement, and rope intersection rules.
 - `shared/protocol.ts`: authoritative checkpoints and sequenced input envelopes.
 - `src/prediction.ts`: rollback/replay, visual correction, and delayed spectator interpolation.
 - `shared/rope.ts`: persistent rope contacts and terrain visibility routing.
 - `src/camera.ts`: viewport scaling, active-player tracking, and pointer conversion.
 - `src/renderer.ts`: original Canvas 2D frogs, terrain, effects, and atmosphere.
+- `src/effect-renderer.ts`: persistent hazards, condition badges, and victim-only visual interference.
 - `src/frog.ts`: shared gaze presentation, proximity expressions, and two-bone leg poses.
 - `src/main.ts`: browser interface, input, and render interpolation.
 - `src/audio.ts` and `src/game-audio.ts`: procedural sound mixer, spatial cues, and motion foley; the shared simulation retains a bounded sound event history for online delivery.
@@ -131,6 +153,7 @@ npm run test:bots
 npm run test:mines
 npm run test:mobile
 npm run test:audio
+npm run test:effects
 # Optional local oMLX visual check, after screenshots exist:
 npm run test:visual
 ```
@@ -139,11 +162,13 @@ The optional visual check uses your local oMLX vision model and a blank-image ne
 
 The unit suite covers deterministic simulation and checkpoint replay, latency and jitter, all weapon families, mystery pickups, saved ammunition, rope momentum, damaging impacts, body collisions, mine arming, deadlines, drowning, delayed victory, sound event delivery, movement foley, bot turns, large rosters, and complete matches. Integration tests use real Colyseus clients on an ephemeral local port, including server capacity and bot room lifecycle checks. The browser smoke test drives two actual browser clients and saves screenshots to `test-results/`; the bot smoke test checks local and online bot setup and play. The mine smoke test checks host controls, input validation, local and online placement, restart persistence, and phone layouts. The mobile smoke test sends browser touch input, including simultaneous fingers, and checks phone layouts, movement and aim, jumps, grappling, firing, and interrupted gestures. It uses Chromium touch emulation; physical-device testing is still useful for browser chrome, cutouts, and handling. The audio smoke test uses the Vite dev server to measure real Web Audio output and check every cue, weapon, mute/unlock controls, and audio graph cleanup.
 
+The effect suite checks condition lifetimes, hazard placement and expiry, rope cuts, gravity and traction, delayed damage, bot choices, and exact checkpoint replay. The effect browser smoke uses Vite module imports to verify all hazard drawings, victim-only overlays, reduced motion, weapon filtering, and mobile layout, saving screenshots in `test-results/`.
+
 Browser tests use system Chrome on macOS when present. Otherwise install Chromium with `npx playwright install chromium`, or set `CHROME_PATH`. To check the production bundle served by `npm start`, use `BASE_URL=http://localhost:2567 npm run test:browser` after building.
 
 ## Scope of this first version
 
-One arena layout, 1–6 frogs per team, human and AI teams, 24 weapons, original visuals and sound effects. Online capacity is controlled by the server's optional `MAX_TEAMS` setting, counting both humans and bots; unset means no application-imposed team limit. There is no terrain destruction, public matchmaking, recovery after a server restart, or support for multiple uncoordinated server replicas. Accidental disconnects keep the team alive and skip its turns. Brief drops reconnect automatically. A saved private reconnect token lets you reload or reopen the room link in the same browser and recover the same team; it is refreshed on every successful reconnection. Rejoining restores eligibility for the team’s next turn, without interrupting another team. If every human is offline, play waits; rooms are discarded after 30 minutes with nobody connected. Explicitly choosing Leave match forfeits the team and clears its saved token. Play with keyboard and mouse or the adaptive phone controls.
+One arena layout, 1–6 frogs per team, human and AI teams, 48 weapons, original visuals and sound effects. Online capacity is controlled by the server's optional `MAX_TEAMS` setting, counting both humans and bots; unset means no application-imposed team limit. There is no terrain destruction, public matchmaking, recovery after a server restart, or support for multiple uncoordinated server replicas. Accidental disconnects keep the team alive and skip its turns. Brief drops reconnect automatically. A saved private reconnect token lets you reload or reopen the room link in the same browser and recover the same team; it is refreshed on every successful reconnection. Rejoining restores eligibility for the team’s next turn, without interrupting another team. If every human is offline, play waits; rooms are discarded after 30 minutes with nobody connected. Explicitly choosing Leave match forfeits the team and clears its saved token. Play with keyboard and mouse or the adaptive phone controls.
 
 Research and fidelity boundaries are recorded in [reference mechanics](docs/reference-mechanics.md). Weapon carryover is an intentional beginner-friendly adaptation requested for Rebate Attack Force.
 

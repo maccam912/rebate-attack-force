@@ -24,8 +24,9 @@ function fire(game: GameEngine, weapon: WeaponId, aimX = 1200, aimY = 500, power
   assert.equal(game.command(id, { type: "fire", power }), true);
 }
 
-test("all 24 weapons are stocked in normal matches and refilled each practice turn", () => {
-  assert.equal(new Set(WEAPON_IDS).size, 24);
+test("the complete arsenal is stocked in normal matches and refilled each practice turn", () => {
+  assert.equal(new Set(WEAPON_IDS).size, WEAPON_IDS.length, "weapon IDs are unique");
+  assert.ok(WEAPON_IDS.length >= 48, "the expanded arsenal remains available");
   const normal = new GameEngine();
   for (const player of normal.state.players) {
     assert.deepEqual(player.inventory, createInventory());

@@ -2,9 +2,45 @@ export type WeaponId =
   | "rocket" | "grenade" | "pulse" | "megaBomb" | "cluster" | "banana"
   | "bouncer" | "sticky" | "mine" | "springMine" | "golf" | "bat" | "boxing"
   | "airstrike" | "meteor" | "shotgun" | "sniper" | "mortar" | "firework"
-  | "anvil" | "vacuum" | "gust" | "disco" | "boomerang";
+  | "anvil" | "vacuum" | "gust" | "disco" | "boomerang"
+  | "oilSlick" | "iceBomb" | "glueGlob" | "razorWire" | "molotov" | "poisonCloud"
+  | "gravityWell" | "repulsor" | "updraft" | "springPad"
+  | "cryoRay" | "invertRay" | "flashbang" | "pixelBomb" | "confusionBomb"
+  | "heavyRay" | "featherRay" | "fireDart" | "venomDart" | "slipperyEel" | "glueSlap" | "rubberizer"
+  | "ropeShears" | "chaosOrb";
 export type GameMode = "practice" | "versus";
 export type GamePhase = "playing" | "retreat" | "settling" | "damage" | "waiting" | "finished";
+
+export type StatusKind =
+  | "slippery" | "sticky" | "burning" | "poisoned" | "chilled" | "confused"
+  | "dazzled" | "pixelated" | "inverted" | "heavy" | "feather" | "bouncy";
+
+export interface PlayerStatus {
+  kind: StatusKind;
+  /** Seconds of the affected frog's control remaining, including retreat. */
+  remaining: number;
+  source: WeaponId;
+  /** Elapsed active time toward the next damage-over-time tick. */
+  tick?: number;
+}
+
+export type HazardKind =
+  | "oil" | "ice" | "glue" | "wire" | "fire" | "poison"
+  | "gravity" | "repulsor" | "updraft" | "spring";
+
+export interface ArenaHazard {
+  id: string;
+  kind: HazardKind;
+  x: number;
+  y: number;
+  radius: number;
+  /** Number of turn changes before this field disappears. */
+  remainingTurns: number;
+  createdTurn: number;
+  weapon: WeaponId;
+  /** Damaging and launch triggers are limited to once per frog per turn. */
+  hitPlayerIds: string[];
+}
 
 export type GameSoundKind =
   | "jump" | "backflip" | "grapple" | "release" | "land" | "bounce"
@@ -88,6 +124,8 @@ export interface Player {
   inventory: Record<WeaponId, number>;
   weapon: WeaponId | null;
   hasCrate: boolean;
+  /** Optional for compatibility with older snapshots. */
+  statuses?: PlayerStatus[];
 }
 
 export interface Crate {
@@ -174,6 +212,8 @@ export interface GameState {
   projectiles: Projectile[];
   mines: Mine[];
   explosions: Explosion[];
+  /** Optional for compatibility with older snapshots. */
+  hazards?: ArenaHazard[];
   /** Optional when reading older saved states or servers. */
   soundEvents?: GameSoundEvent[];
   soundSequence?: number;

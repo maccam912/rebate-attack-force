@@ -102,11 +102,11 @@ try {
 
   await page.evaluate(async () => {
     const { GameAudio } = await import("/src/audio.ts");
-    const { WEAPON_IDS } = await import("/shared/weapons.ts");
+    const { WEAPONS } = await import("/shared/weapons.ts");
     const audio = new GameAudio();
     audio.setEnabled(true);
     await audio.unlock();
-    window.__audioSmoke = { audio, probe: window.__audioProbes.at(-1), weapons: WEAPON_IDS };
+    window.__audioSmoke = { audio, probe: window.__audioProbes.at(-1), weapons: WEAPONS.map((weapon) => weapon.id) };
   });
   await page.waitForFunction(() => window.__audioSmoke.probe.context.state === "running");
   const cues = [
@@ -132,7 +132,8 @@ try {
     return results;
   }, cues);
   for (const result of generated) requireSignal(result.peak, result.name);
-  assert.equal(generated.length, cues.length + 24 * 2, "Every weapon has both a firing and impact cue");
+  const weaponCount = await page.evaluate(() => window.__audioSmoke.weapons.length);
+  assert.equal(generated.length, cues.length + weaponCount * 2, "Every weapon has both a firing and impact cue");
   console.log(`PASS: nonzero audio samples for ${generated.length} cues and weapon variants (peak ${Math.max(...generated.map((result) => result.peak)).toFixed(3)})`);
 
   const burst = await page.evaluate(async () => {

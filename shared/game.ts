@@ -17,6 +17,7 @@ import { DEFAULT_MINE_COUNT, teamColor, teamSettings, validMineCount } from "./s
 import { createInventory, WEAPON_CATALOG, WEAPON_IDS, type WeaponDefinition } from "./weapons.js";
 import type { GameSnapshot } from "./protocol.js";
 import { applyImpulse, GRAVITY, WALK_SPEED, HARD_IMPACT_SPEED, limitBodySpeed, surfaceImpact, updateBodyAttitude } from "./physics.js";
+import { addStatus, hasStatus, hazardTouches, MAX_HAZARDS, projectHazard, ropeIntersectsCircle, ropeIntersectsWire } from "./effects.js";
 
 export type * from "./types.js";
 
@@ -192,6 +193,7 @@ export class GameEngine {
           angularVelocity: 0,
           impact: 0,
           tumble: 0,
+          statuses: [],
           inventory: createInventory(options.mode),
           weapon: "rocket",
           hasCrate: true,
@@ -209,6 +211,7 @@ export class GameEngine {
       crates: [],
       projectiles: [],
       mines: [],
+      hazards: [],
       explosions: [],
       soundEvents: [],
       soundSequence: 0,
@@ -321,9 +324,10 @@ export class GameEngine {
     switch (command.type) {
       case "jump":
         if (!player.grounded) return false;
-        if (input.left !== input.right) player.facing = input.right ? 1 : -1;
+        if (input.left !== input.right)
+          player.facing = (input.right !== hasStatus(player, "inverted")) ? 1 : -1;
         this.jump = { id, at: this.elapsed, facing: player.facing };
-        player.vy = -525;
+        player.vy = -525 * this.jumpStrength(player);
         player.angularVelocity += player.facing * -1.8;
         player.grounded = false;
         this.playerSound("jump", player);
@@ -331,8 +335,8 @@ export class GameEngine {
       case "backflip":
         if (!this.jump || this.jump.id !== id || player.grounded ||
           this.elapsed - this.jump.at > DOUBLE_JUMP_SECONDS) return false;
-        player.vy = -760;
-        player.vx = -this.jump.facing * 310;
+        player.vy = -760 * this.jumpStrength(player);
+        player.vx = -this.jump.facing * 310 * this.jumpStrength(player);
         player.angularVelocity = -this.jump.facing * 13;
         player.tumble = 0.7;
         player.rope = null;
@@ -356,6 +360,7 @@ export class GameEngine {
           length: Math.max(40, hit.distance),
           bends: [],
         };
+        if (this.cutWireRope(player)) return false;
         this.playerSound("grapple", player);
         return true;
       }
@@ -456,6 +461,8 @@ export class GameEngine {
       return;
     }
 
+    this.updateEffects(realDt, dt);
+
     for (const player of this.state.players) {
       if (!this.isPhysical(player)) continue;
       const isActive = player.id === this.state.activePlayerId && this.canMove();
@@ -470,6 +477,7 @@ export class GameEngine {
           player.rope.length = Math.max(player.rope.length, ropePathLength(player.rope, player));
         else player.rope = null;
       }
+      this.cutWireRope(player);
       if (player.y + PLAYER_RADIUS >= WATER_Y) this.drown(player);
     }
     this.updateProjectiles(dt, realDt);
@@ -510,6 +518,95 @@ export class GameEngine {
 
   private isPhysical(player: Player): boolean {
     return player.alive && !this.state.resolution?.drownedPlayerIds.includes(player.id);
+  }
+
+  private jumpStrength(player: Player): number {
+    return hasStatus(player, "sticky") ? 0.68 : hasStatus(player, "heavy") ? 0.75 :
+      hasStatus(player, "chilled") ? 0.8 : 1;
+  }
+
+  private cutWireRope(player: Player): boolean {
+    if (!player.rope || !(this.state.hazards ?? []).some((hazard) =>
+      hazard.kind === "wire" && ropeIntersectsWire(player, hazard))) return false;
+    player.rope = null;
+    this.playerSound("release", player, { weapon: "razorWire", intensity: 0.9 });
+    if (player.id === this.state.activePlayerId && this.canMovePhase())
+      this.state.message = "Razor wire cut your rope! Keep your momentum and find another anchor.";
+    return true;
+  }
+
+  private cutRopes(center: Point, radius: number, immuneId?: string): void {
+    for (const player of this.state.players) {
+      if (!this.isPhysical(player) || player.id === immuneId || !ropeIntersectsCircle(player, center, radius)) continue;
+      player.rope = null;
+      this.playerSound("release", player, { intensity: 1 });
+    }
+  }
+
+  private createHazard(x: number, y: number, definition: WeaponDefinition): void {
+    const effect = definition.hazard!;
+    const placement = projectHazard({ x, y }, effect.kind, effect.radius, this.state.platforms, this.state.waterY);
+    if (!placement) return;
+    const hazards = this.state.hazards ??= [];
+    hazards.push({ id: this.id("hazard"), kind: effect.kind, ...placement,
+      remainingTurns: effect.turns, createdTurn: this.state.turn, weapon: definition.id, hitPlayerIds: [] });
+    if (hazards.length > MAX_HAZARDS) hazards.splice(0, hazards.length - MAX_HAZARDS);
+  }
+
+  /** Debuffs spend the victim's control time; presentation and other teams cannot exhaust them. */
+  private updateEffects(realDt: number, dt: number): void {
+    if (!this.canMove()) return;
+    const player = this.state.players.find((p) => p.id === this.state.activePlayerId && this.isPhysical(p));
+    if (!player) return;
+    for (const status of player.statuses ?? []) {
+      const elapsed = Math.min(status.remaining, realDt);
+      status.remaining = Math.max(0, status.remaining - realDt);
+      if (status.kind !== "burning" && status.kind !== "poisoned") continue;
+      status.tick = (status.tick ?? 0) + elapsed;
+      if (status.tick >= 1 - 1e-9) {
+        status.tick = Math.max(0, status.tick - 1);
+        this.recordDamage(player, status.kind === "burning" ? 3 : 2);
+      }
+    }
+    player.statuses = (player.statuses ?? []).filter((status) => status.remaining > 1e-9);
+    for (const hazard of this.state.hazards ?? []) {
+      if (!hazardTouches(hazard, player)) continue;
+      const origin = { x: hazard.x, y: hazard.y -
+        (["gravity", "repulsor", "updraft"].includes(hazard.kind) ? 0 : 6) };
+      const dx = player.x - origin.x, dy = player.y - origin.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance > 1 && this.raycast(origin.x, origin.y, dx / distance, dy / distance,
+        Math.max(0, distance - PLAYER_RADIUS))) continue;
+      if (hazard.kind === "oil" || hazard.kind === "ice" || hazard.kind === "glue") {
+        addStatus(player, hazard.kind === "glue" ? "sticky" : hazard.kind === "ice" ? "chilled" : "slippery",
+          0.2, hazard.weapon);
+      } else if (hazard.kind === "gravity" || hazard.kind === "repulsor" || hazard.kind === "updraft") {
+        this.affect(player);
+        const strength = Math.max(0.15, 1 - distance / (hazard.radius + PLAYER_RADIUS));
+        if (hazard.kind === "updraft") player.vy -= 1850 * dt;
+        else {
+          const force = (hazard.kind === "gravity" ? -2100 : 2500) * strength * dt;
+          player.vx += dx / Math.max(20, distance) * force;
+          player.vy += dy / Math.max(20, distance) * force;
+        }
+        limitBodySpeed(player);
+      } else if (!hazard.hitPlayerIds.includes(player.id)) {
+        hazard.hitPlayerIds.push(player.id);
+        if (hazard.kind === "wire") {
+          this.recordDamage(player, 8);
+          addStatus(player, "sticky", 0.7, hazard.weapon);
+          this.playerSound("hurt", player, { weapon: hazard.weapon, intensity: 0.25 });
+        } else if (hazard.kind === "fire" || hazard.kind === "poison") {
+          addStatus(player, hazard.kind === "fire" ? "burning" : "poisoned",
+            hazard.kind === "fire" ? 4 : 6, hazard.weapon);
+        } else if (hazard.kind === "spring") {
+          this.affect(player);
+          applyImpulse(player, 100 * player.facing, -880, player.facing * 8);
+          this.playerSound("bounce", player, { weapon: hazard.weapon, intensity: 0.8 });
+        }
+      }
+    }
+    this.cutWireRope(player);
   }
 
   private resolution() {
@@ -626,7 +723,11 @@ export class GameEngine {
     dt: number,
     active: boolean,
   ): void {
-    const axis = Number(input.right) - Number(input.left);
+    const axis = (Number(input.right) - Number(input.left)) * (hasStatus(player, "inverted") ? -1 : 1);
+    const slippery = hasStatus(player, "slippery") || hasStatus(player, "chilled");
+    const sticky = hasStatus(player, "sticky");
+    const chilled = hasStatus(player, "chilled");
+    const walkSpeed = WALK_SPEED * (sticky ? 0.35 : chilled ? 0.58 : hasStatus(player, "heavy") ? 0.7 : 1);
     const wasGrounded = player.grounded;
     if (axis) {
       player.facing = axis > 0 ? 1 : -1;
@@ -638,28 +739,29 @@ export class GameEngine {
         const direction = dy < 0 ? -axis : axis;
         const tangent = (player.vx * dy - player.vy * dx) / distance;
         const effort = clamp(1 - tangent * direction / 1100, 0, 1);
-        player.vx += direction * dy / distance * 850 * effort * dt;
-        player.vy -= direction * dx / distance * 850 * effort * dt;
+        player.vx += direction * dy / distance * 850 * effort * dt * (sticky ? 0.4 : 1);
+        player.vy -= direction * dx / distance * 850 * effort * dt * (sticky ? 0.4 : 1);
       } else if (wasGrounded) {
         const speed = player.vx * axis;
         // A motor can accelerate to walking pace or brake a launch, never erase it.
-        if (speed < WALK_SPEED) {
-          const acceleration = player.tumble > 0 ? 520 : 1800;
-          player.vx += axis * Math.min(acceleration * dt, WALK_SPEED - speed);
+        if (speed < walkSpeed) {
+          const acceleration = (player.tumble > 0 ? 520 : 1800) * (slippery ? 0.18 : sticky ? 0.5 : 1);
+          player.vx += axis * Math.min(acceleration * dt, walkSpeed - speed);
         }
       } else player.vx += axis * (player.tumble > 0 ? 240 : 520) * dt;
     }
     if (wasGrounded) {
       const rolling = player.tumble > 0 || Math.abs(player.vx) > WALK_SPEED + 10;
-      player.vx *= Math.exp(-(rolling ? 0.9 : axis ? 0 : 10) * dt);
+      player.vx *= Math.exp(-(slippery ? (this.canMovePhase() ? 0.12 : 1.8) : sticky ? 14 : rolling ? 0.9 : axis ? 0 : 10) * dt);
     } else player.vx *= Math.exp(-0.025 * dt);
 
-    player.vy += GRAVITY * dt;
+    player.vy += GRAVITY * dt * (hasStatus(player, "heavy") ? 2.1 : hasStatus(player, "feather") ? 0.3 : 1);
     let reelSpeed = 0;
     if (player.rope && active) {
       const oldLength = player.rope.length;
       player.rope.length = clamp(
-        player.rope.length + (Number(input.down) - Number(input.up)) * 205 * dt,
+        player.rope.length + (Number(input.down) - Number(input.up)) * 205 * dt *
+          (hasStatus(player, "inverted") ? -1 : 1) * (sticky ? 0.4 : 1),
         42,
         GRAPPLE_RANGE,
       );
@@ -827,6 +929,15 @@ export class GameEngine {
       if (physical) {
         const speed = -(player.vx * nx + player.vy * ny);
         const damage = surfaceImpact(player, nx, ny);
+        if (hasStatus(player, "bouncy") && speed > 180) {
+          const outgoing = player.vx * nx + player.vy * ny;
+          const restitution = this.canMovePhase() ? 0.85 : 0.55;
+          const extra = Math.max(0, speed * restitution - outgoing);
+          player.vx += nx * extra;
+          player.vy += ny * extra;
+          player.grounded = false;
+          player.tumble = Math.max(player.tumble, 0.5);
+        }
         // Traversal is safe for the active frog; weapon/body launches lose that immunity.
         if (damage > 0 && (player.id !== this.state.activePlayerId ||
           this.state.resolution?.affectedPlayerIds.includes(player.id))) {
@@ -951,6 +1062,8 @@ export class GameEngine {
     this.resolution().weapon = weapon;
     this.playerSound("shot", player, { weapon, intensity: power });
     if (definition.attack === "melee") {
+      if (definition.cutsRopes) this.cutRopes({ x: player.x + direction.x * definition.range / 2,
+        y: player.y + direction.y * definition.range / 2 }, definition.range, player.id);
       const angle = Math.atan2(direction.y, direction.x);
       this.state.explosions.push({ id: this.id("swing"), x: player.x + direction.x * 48,
         y: player.y + direction.y * 48, radius: definition.range, age: 0,
@@ -962,6 +1075,7 @@ export class GameEngine {
         if (distance > definition.range + PLAYER_RADIUS || distance < 1) continue;
         if ((dx * direction.x + dy * direction.y) / distance < 0.5) continue;
         if (this.raycast(player.x, player.y, dx / distance, dy / distance, distance)) continue;
+        if (definition.status) addStatus(target, definition.status.kind, definition.status.duration, weapon);
         this.recordDamage(target, Math.round(definition.damage * (0.7 + power * 0.3)));
         this.affect(target);
         this.impactBeat(target, 0.85);
@@ -1198,6 +1312,7 @@ export class GameEngine {
     impulseScale = 1,
     deathBlast = false,
   ): void {
+    if (!deathBlast && definition.cutsRopes) this.cutRopes({ x, y }, radius, immunePlayerId);
     this.beginSettling();
     this.impactBeat({ x, y }, clamp(radius / 200 * impulseScale, 0.25, 1));
     this.sound("explosion", { x, y }, { ...(deathBlast ? {} : { weapon: definition.id }),
@@ -1205,6 +1320,7 @@ export class GameEngine {
     this.state.explosions.push({ id: this.id("blast"), x, y, radius, age: 0,
       kind: definition.kind, ...(deathBlast ? {} : { weapon: definition.id }), color: definition.color,
       ...(direction ? { direction: Math.atan2(direction.y, direction.x) } : {}) });
+    if (!deathBlast && definition.hazard) this.createHazard(x, y, definition);
     for (const player of this.state.players) {
       if (!this.isPhysical(player) || player.id === immunePlayerId) continue;
       const dx = player.x - x, dy = player.y - y;
@@ -1214,6 +1330,8 @@ export class GameEngine {
       const nx = distance > 1 ? dx / distance : 0;
       const ny = distance > 1 ? dy / distance : -1;
       const cover = this.raycast(x, y, nx, ny, Math.max(0, distance - PLAYER_RADIUS)) ? 0.4 : 1;
+      if (!deathBlast && definition.status && cover === 1)
+        addStatus(player, definition.status.kind, definition.status.duration, definition.id);
       this.recordDamage(player, Math.round(damage * (0.28 + force * 0.72) * cover));
       this.affect(player);
       const impulse = definition.impulse * (0.32 + force * 0.68) * impulseScale * cover;
@@ -1231,6 +1349,7 @@ export class GameEngine {
     player.alive = false;
     player.hp = 0;
     player.rope = null;
+    player.statuses = [];
     player.weapon = null;
     player.hasCrate = false;
     player.vx = 0;
@@ -1315,6 +1434,10 @@ export class GameEngine {
       this.inputs.set(player.id, blankInput(player.lookAt));
     });
     this.state.turn++;
+    this.state.hazards = (this.state.hazards ?? []).filter((hazard) => {
+      hazard.hitPlayerIds = [];
+      return --hazard.remainingTurns > 0;
+    });
     for (const mine of this.state.mines)
       if (mine.placedTurn === this.state.turn - 1)
         this.sound("mineArm", mine, { weapon: mine.kind });

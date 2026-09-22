@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { BotController } from "../shared/bots.js";
 import { GameEngine, PLAYER_RADIUS, WIDTH } from "../shared/game.js";
-import { WEAPON_IDS } from "../shared/weapons.js";
+import { WEAPONS, WEAPON_IDS } from "../shared/weapons.js";
 import type { Player, WeaponId } from "../shared/types.js";
 
 const FRAME = 1 / 60;
@@ -64,6 +64,39 @@ test("bots spend normal ammo, hit an enemy and yield control to the human", () =
   const stopped = game.capture();
   controller.update(game, 0.25);
   assert.deepEqual(game.capture(), stopped);
+});
+
+test("bots value disruption even when its immediate damage and shove are negligible", () => {
+  const { game, bot, target, controller } = arena();
+  const weapon = WEAPONS.find((definition) => definition.status?.kind === "chilled")!;
+  onlyWeapon(bot, weapon.id);
+  // A one-HP enemy contributes at most one damage point. Debuff utility is what
+  // lifts this shot above the bot's threshold for spending equipment.
+  target.hp = 1;
+  for (let i = 0; i < 4; i++) controller.update(game, 0.25);
+  assert.equal(bot.inventory[weapon.id], 0);
+  assert.equal(game.state.projectiles[0]?.kind, weapon.id);
+});
+
+test("bots deploy persistent zero-damage fields and avoid debuffing an intervening teammate", () => {
+  const field = arena();
+  const repulsor = WEAPONS.find((definition) => definition.hazard?.kind === "repulsor")!;
+  assert.equal(repulsor.damage, 0);
+  onlyWeapon(field.bot, repulsor.id);
+  advance(field.game, field.controller, 3, () => field.game.state.hazards?.some((hazard) => hazard.kind === "repulsor") ?? false);
+  assert.equal(field.bot.inventory[repulsor.id], 0);
+  assert.ok(field.game.state.hazards?.some((hazard) => hazard.kind === "repulsor"));
+
+  const { game, bot, controller } = arena(2);
+  const ray = WEAPONS.find((definition) => definition.status?.kind === "inverted")!;
+  onlyWeapon(bot, ray.id);
+  const ally = game.state.players[1]!;
+  Object.assign(ally, { x: 650, y: bot.y });
+  for (let i = 0; i < 4; i++) controller.update(game, 0.25);
+  assert.equal(bot.inventory[ray.id], 1, "an allied debuff is a cost, even when an enemy is behind them");
+  ally.x = 300;
+  for (let i = 0; i < 4; i++) controller.update(game, 0.25);
+  assert.equal(bot.inventory[ray.id], 0);
 });
 
 test("a bot lobs a mortar over cover instead of firing into a wall", () => {

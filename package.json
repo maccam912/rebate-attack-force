@@ -15,6 +15,7 @@
     "test:mines": "node scripts/mines-smoke.mjs",
     "test:mobile": "node scripts/mobile-smoke.mjs",
     "test:audio": "node scripts/audio-smoke.mjs",
+    "test:effects": "node scripts/effects-smoke.mjs",
     "typecheck": "tsc --noEmit",
     "test:visual": "node scripts/visual-review.mjs"
   },

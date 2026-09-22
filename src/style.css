@@ -24,6 +24,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .hud { position: absolute; top: max(16px, env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left)); display: flex; align-items: center; gap: 20px; background: #173329dd; border: 1px solid var(--line); padding: 10px 15px; border-radius: 8px; pointer-events: none; }
 .turn-player { font-size: 13px; font-weight: 700; }
 .turn-caption { font-size: 9px; letter-spacing: 1px; color: #bdd0ad; margin-top: 4px; }
+.active-statuses { display: flex; flex-wrap: wrap; gap: 4px; max-width: 370px; margin-top: 7px; }
+.status-chip { display: inline-flex; align-items: center; gap: 4px; color: var(--effect-color); border: 1px solid #ffffff22; border-radius: 4px; padding: 3px 5px; background: #071e1766; font-size: 9px; white-space: nowrap; }
+.status-chip b { color: #f5f2d7; font-variant-numeric: tabular-nums; }
 .timer { font-family: var(--display); font-size: 32px; line-height: 1; color: var(--lime); min-width: 32px; text-align: right; }
 .timer.urgent { color: #ffa778; }
 .arena-bottom { position: absolute; bottom: max(18px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); display: flex; justify-content: space-between; align-items: center; gap: 22px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: #173329ed; max-width: calc(100% - 24px); }
@@ -38,8 +41,16 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .arsenal-heading h2 { font: 600 34px var(--display); margin: 5px 0 0; }
 .arsenal-intro, .arsenal-footer { font-size: 11px; line-height: 1.6; color: var(--dim); }
 .arsenal-footer { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+.arsenal-filters { display: flex; gap: 8px; position: sticky; top: -22px; z-index: 1; padding: 10px 0; background: #142d25; }
+.arsenal-search { flex: 1; min-width: 0; }
+.arsenal-filters input, .arsenal-filters select { width: 100%; min-height: 44px; border: 1px solid #d0e77e40; padding: 10px 12px; background: #1a382d; font-size: 12px; }
+.arsenal-filters input::placeholder { color: #b1c2a8; }
+.arsenal-filters select { max-width: 170px; }
+.arsenal-results { color: var(--dim); font-size: 10px; line-height: 1.5; margin: 1px 0 14px; }
+.arsenal-empty { margin: 5px 0; padding: 20px 12px; border: 1px dashed var(--line); border-radius: 7px; color: var(--dim); font-size: 12px; line-height: 1.7; }
 .inventory { display: grid; gap: 16px; }
 .arsenal-group h3 { color: var(--lime); font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; margin: 0 0 8px; }
+.arsenal-group h3 > span { color: var(--dim); font-size: 9px; margin-left: 5px; }
 .arsenal-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
 .ammo-slot { display: flex; align-items: center; gap: 9px; padding: 10px; min-height: 80px; background: #ffffff06; border: 1px solid var(--line); text-align: left; }
 .ammo-slot:hover:not(:disabled) { background: #d0e77e15; border-color: #d0e77e90; }
@@ -47,6 +58,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .ammo-copy { flex: 1; min-width: 0; }
 .ammo-copy strong { display: block; font-size: 12px; line-height: 1.3; color: #eff0d4; }
 .ammo-copy small { display: block; font-size: 10px; line-height: 1.45; color: var(--dim); margin-top: 4px; }
+.weapon-effects { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 7px; }
+.weapon-effects > span { display: inline-block; font-size: 8px; line-height: 1.4; padding: 2px 4px; border-radius: 3px; border: 1px solid #d0e77e25; color: #e1e9c0; background: #d0e77e0a; }
 .ammo-count { font-size: 12px; color: var(--lime); align-self: flex-start; }
 .ammo-slot.selected { border-color: #d0e77e80; background: #d0e77e15; }
 .ammo-slot.selected:disabled { opacity: .65; }
@@ -131,6 +144,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 650px) {
   .arsenal-panel { padding: 15px; }
+  .arsenal-filters { top: -15px; flex-wrap: wrap; }
+  .arsenal-filters > label { flex: 1 1 140px; }
+  .arsenal-filters select { max-width: none; }
   .arsenal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .arsenal-heading h2 { font-size: 28px; }
   .arena-top-tools { top: 12px; right: 12px; gap: 4px; }
@@ -336,6 +352,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 }
 #app[data-touch="true"] .ammo-slot { min-height: 86px; }
 #app[data-touch="true"] .arsenal-heading { gap: 8px; }
+#app[data-touch="true"] .arsenal-filters { top: -16px; }
+#app[data-touch="true"] .active-statuses { max-width: 210px; gap: 3px; }
+#app[data-touch="true"] .status-chip { font-size: 8px; padding: 2px 4px; }
 #app[data-touch="true"] .arsenal-heading .eyebrow { font-size: 8px; }
 #app[data-touch="true"] .touch-help { display: block; }
 #app[data-touch="true"] .desktop-help { display: none; }
