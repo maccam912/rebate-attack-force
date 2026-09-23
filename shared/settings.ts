@@ -4,7 +4,7 @@ export const MAX_FROGS = 6;
 export const MAX_HP = 500;
 export const DEFAULT_MINE_COUNT = 0;
 export const MAX_MINES = 50;
-export const DEFAULT_TEAM_SETTINGS: TeamSettings = { frogs: 1, hp: 100 };
+export const DEFAULT_TEAM_SETTINGS: TeamSettings = { frogs: 3, hp: 100 };
 
 const TEAM_COLORS = ["#9fe870", "#ffb86b", "#b9a2ff", "#71dce4"];
 

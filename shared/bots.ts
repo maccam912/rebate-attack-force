@@ -253,10 +253,11 @@ export class BotController {
       player.x + PLAYER_RADIUS >= platform.x && player.x - PLAYER_RADIUS <= platform.x + platform.w) ?? null;
 
     const aim = state.phase === "retreat" ? player.lookAt : target;
+    const hasAmmo = WEAPONS.some((weapon) => team.inventory[weapon.id] > 0);
     let direction = 0;
     if (state.phase === "playing" && this.elapsed >= this.nextThink) {
       this.nextThink = this.elapsed + THINK_SECONDS;
-      if (player.hasCrate) {
+      if (hasAmmo) {
         const shot = chooseShot(state, player, enemies);
         if (shot) {
           game.setInput(player.id, { left: false, right: false, up: false, down: false,
@@ -282,7 +283,7 @@ export class BotController {
         const crate = state.crates.filter((candidate) => Math.abs(candidate.y + PLAYER_RADIUS - this.support!.y) < 4 &&
           candidate.x >= safeLeft && candidate.x <= safeRight)
           .sort((a, b) => distance(a, player) - distance(b, player))[0];
-        if (crate && (!player.hasCrate || this.elapsed > 2)) goalX = crate.x;
+        if (crate && (!hasAmmo || this.elapsed > 2)) goalX = crate.x;
       }
       const difference = clamp(goalX, safeLeft, safeRight) - player.x;
       if (Math.abs(difference) > 12) direction = Math.sign(difference);

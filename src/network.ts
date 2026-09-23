@@ -6,10 +6,11 @@ import { ClientPrediction } from "./prediction";
 export type LobbyState = {
   roomId: string;
   hostId: string;
-  players: Team[];
+  players: Omit<Team, "inventory">[];
   started: boolean;
   maxTeams: number | null;
   mineCount: number;
+  mapId: string;
 };
 
 type Callbacks = {
@@ -56,10 +57,10 @@ export class RoomConnection {
     return this.prediction.advance(dtSeconds, nowMs);
   }
 
-  async create(name: string): Promise<void> {
+  async create(name: string, mapId?: string): Promise<void> {
     await this.leave();
     this.attach(
-      await this.client.create("attack", { name: name.slice(0, 20) }),
+      await this.client.create("attack", { name: name.slice(0, 20), mapId }),
     );
   }
 
@@ -101,6 +102,11 @@ export class RoomConnection {
   }
   configureMines(mineCount: number) {
     if (this.connected) this.room?.send("mineSettings", { mineCount });
+  }
+  configureMap(mapId: string): boolean {
+    if (!this.connected || !this.room) return false;
+    this.room.send("mapSettings", { mapId });
+    return true;
   }
   addBot() {
     if (this.connected) this.room?.send("addBot");

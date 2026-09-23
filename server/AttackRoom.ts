@@ -5,6 +5,7 @@ import type { GameCommand, PlayerInput, Team, WeaponId } from "../shared/types";
 import { DEFAULT_MINE_COUNT, DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, MAX_MINES, teamColor, validMineCount, validTeamSettings } from "../shared/settings";
 import { MAX_SEQUENCE_GAP, type ServerState } from "../shared/protocol";
 import { WEAPON_IDS } from "../shared/weapons";
+import { DEFAULT_MAP_ID, isMapId } from "../shared/maps";
 
 const NEUTRAL: PlayerInput = {
   left: false,
@@ -24,7 +25,7 @@ const COMMANDS = new Set([
   "selectWeapon",
 ]);
 const WEAPONS = new Set<WeaponId>(WEAPON_IDS);
-type Guest = Team;
+type Guest = Omit<Team, "inventory">;
 type Budget = { at: number; tokens: number };
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -58,8 +59,13 @@ export class AttackRoom extends Room {
   private bots = new BotController();
   private botNumber = 0;
   private mineCount = DEFAULT_MINE_COUNT;
+  private mapId = DEFAULT_MAP_ID;
 
-  async onCreate() {
+  async onCreate(options: unknown = {}) {
+    if (record(options) && options.mapId !== undefined) {
+      if (!isMapId(options.mapId)) throw new ServerError(400, "Choose a valid map.");
+      this.mapId = options.mapId;
+    }
     this.maxClients = this.maxTeams ?? Infinity;
     await this.setPrivate(true);
     this.onMessage("sync", (client) => {
@@ -161,6 +167,29 @@ export class AttackRoom extends Room {
         return;
       }
       this.mineCount = message.mineCount;
+      this.broadcast("lobby", this.lobby());
+    });
+    this.onMessage("mapSettings", (client, message: unknown) => {
+      if (!this.consume(client, "settings", 20)) {
+        // Send the authoritative choice before the notice lets a client clear
+        // its optimistic selection, including when the final browse was dropped.
+        client.send("lobby", this.lobby());
+        client.send("notice", "Map changes are arriving too quickly. Your last choice was not applied; try again.");
+        return;
+      }
+      if (client.sessionId !== this.hostId) {
+        client.send("notice", "Only the room host can change the map.");
+        return;
+      }
+      if (this.game) {
+        client.send("notice", "The map is fixed once the match starts.");
+        return;
+      }
+      if (!record(message) || !isMapId(message.mapId)) {
+        client.send("notice", "Choose a valid map.");
+        return;
+      }
+      this.mapId = message.mapId;
       this.broadcast("lobby", this.lobby());
     });
     this.onMessage("addBot", (client) => {
@@ -308,6 +337,7 @@ export class AttackRoom extends Room {
       mode: "versus",
       seed: Date.now(),
       mineCount: this.mineCount,
+      mapId: this.mapId,
     });
     this.bots = new BotController();
     this.lastInput.clear();
@@ -348,6 +378,7 @@ export class AttackRoom extends Room {
       started: this.game !== null,
       maxTeams: this.maxTeams,
       mineCount: this.mineCount,
+      mapId: this.mapId,
     };
   }
 

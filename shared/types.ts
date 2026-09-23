@@ -68,6 +68,8 @@ export interface Team extends TeamSettings {
   name: string;
   color: string;
   connected: boolean;
+  /** All frogs on this team spend ammunition from this shared stash. */
+  inventory: Record<WeaponId, number>;
   /** Bot teams use the same turn and combat rules, without a client connection. */
   bot?: boolean;
 }
@@ -78,6 +80,10 @@ export interface Platform {
   y: number;
   w: number;
   h: number;
+  /** Cosmetic silhouettes share the same solid, predictable collision top. */
+  appearance?: "slab" | "rock" | "branch" | "canopy" | "tortoise" | "crocodile" | "crystal";
+  /** Only the outer walls survive when an arena expands for extra teams. */
+  boundary?: "left" | "right";
 }
 
 export interface PlayerInput {
@@ -121,6 +127,7 @@ export interface Player {
   /** Recent collision intensity for cosmetic squash, flashes and leg reactions. */
   impact: number;
   tumble: number;
+  /** Compatibility alias of the owning team's inventory, rebound after restore. */
   inventory: Record<WeaponId, number>;
   weapon: WeaponId | null;
   hasCrate: boolean;
@@ -132,7 +139,6 @@ export interface Crate {
   id: string;
   x: number;
   y: number;
-  weapon: WeaponId;
 }
 
 export interface Projectile {
@@ -202,6 +208,10 @@ export interface TurnResolution {
 }
 
 export interface GameState {
+  /** Missing in older snapshots, which use the original scrapyard. */
+  mapId?: string;
+  /** Missing in older snapshots means water is enabled. */
+  hasWater?: boolean;
   width: number;
   height: number;
   waterY: number;
@@ -236,6 +246,7 @@ export type GameCommand = {
 };
 
 export interface GameOptions {
+  mapId?: string;
   players?: { id: string; name: string; color?: string; frogs?: number; hp?: number; connected?: boolean; bot?: boolean }[];
   mode?: GameMode;
   seed?: number;

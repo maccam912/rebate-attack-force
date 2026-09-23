@@ -1,3 +1,4 @@
+import { singleFrogGame, stockWeapons } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FIXED_STEP, GameEngine, PLAYER_RADIUS, WATER_Y, WIDTH } from "../shared/game.js";
@@ -14,7 +15,8 @@ function until(game: GameEngine, predicate: () => boolean, description: string, 
   assert.ok(predicate(), description);
 }
 function arena() {
-  const game = new GameEngine({ players: ["a", "b", "c"].map((id) => ({ id, name: id })), seed: 123 });
+  const game = singleFrogGame({ players: ["a", "b", "c"].map((id) => ({ id, name: id })), seed: 123 });
+  stockWeapons(game);
   game.state.platforms = [{ id: "floor", x: 0, y: 1000, w: WIDTH, h: 800 }];
   game.state.crates = [];
   const [a, b, c] = game.state.players;
@@ -120,7 +122,7 @@ test("damage close-ups are sequential and a death explosion creates another sett
 });
 
 test("drowning stays pending until its damage close-up and cannot announce victory early", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const frog = game.state.players[0];
   Object.assign(frog, { x: 25, y: WATER_Y - PLAYER_RADIUS });
   game.step(FIXED_STEP);
@@ -165,7 +167,7 @@ test("checkpoints replay impact slow motion and a partly shown damage outcome ex
   fire(game, "bat", b.x, b.y);
   advance(game, 0.07);
   assert.ok(game.state.resolution!.slowMotionRemaining > 0);
-  const restored = new GameEngine({ seed: 999 });
+  const restored = singleFrogGame({ seed: 999 });
   restored.restore(game.capture());
   for (let frame = 0; frame < 1500 && !game.state.resolution?.reveal; frame++) {
     game.step(FIXED_STEP);

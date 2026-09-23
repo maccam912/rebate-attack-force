@@ -5,6 +5,11 @@ import { ClientPrediction, interpolateStates } from "../src/prediction";
 import { MAX_PENDING_FRAMES, NETWORK_STEP, type InputFrame, type ServerState } from "../shared/protocol";
 import type { PlayerInput } from "../shared/types";
 
+const createGame = (options: ConstructorParameters<typeof GameEngine>[0] = {}) => new GameEngine({
+  players: [{ id: "p1", name: "Moss", frogs: 1 }, { id: "p2", name: "Tangerine", frogs: 1 }],
+  ...options,
+});
+
 const input: PlayerInput = { left: false, right: false, up: false, down: false, aimX: 600, aimY: 1000 };
 
 function snapshot(game: GameEngine, ack = 0, epoch = "match-1"): ServerState {
@@ -19,12 +24,12 @@ function applyFrame(game: GameEngine, frame: InputFrame): void {
 }
 
 test("checkpoints restore fixed-step remainder, jump timing, random generator and entity IDs without aliases", () => {
-  const original = new GameEngine({ mode: "practice", seed: 991 });
+  const original = createGame({ mode: "practice", seed: 991 });
   original.setInput("p1", { ...input, right: true });
   original.command("p1", { type: "jump" });
   original.step(FIXED_STEP * 5.5);
   const saved = original.capture();
-  const restored = new GameEngine({ seed: 88 });
+  const restored = createGame({ seed: 88 });
   restored.restore(saved);
   saved.state.players[0].hp = 1;
   saved.simulation.inputs[0][1].aimX = -123;
@@ -39,7 +44,7 @@ test("checkpoints restore fixed-step remainder, jump timing, random generator an
 });
 
 test("the active frog moves and jumps before server acknowledgement", () => {
-  const server = new GameEngine({ mode: "practice" });
+  const server = createGame({ mode: "practice" });
   const sent: InputFrame[] = [];
   const client = new ClientPrediction((frame) => sent.push(frame));
   client.receive(snapshot(server), "p1", 0);
@@ -56,8 +61,59 @@ test("the active frog moves and jumps before server acknowledgement", () => {
   assert.equal("dt" in sent[0], false, "the client never asks the server to advance time");
 });
 
+test("active movement stays smooth between network steps on high-refresh displays", () => {
+  const server = createGame({ mode: "practice", mineCount: 0 });
+  server.state.crates = [];
+  const authority = server.capture();
+  const sent: InputFrame[] = [];
+  const client = new ClientPrediction((frame) => sent.push(frame));
+  client.receive(snapshot(server), "p1", 0);
+  client.input({ ...input, right: true });
+  for (let i = 1; i <= 20; i++) client.advance(NETWORK_STEP, i * 1000 / 60);
+  let previous = client.advance(0, 1000 / 3)!.players[0].x;
+  const moves: number[] = [];
+  for (let i = 1; i <= 24; i++) {
+    const shown = client.advance(NETWORK_STEP / 2, 1000 / 3 + i * 1000 / 120)!;
+    moves.push(shown.players[0].x - previous);
+    previous = shown.players[0].x;
+  }
+  assert.ok(moves.every((distance) => distance > 0), "120 Hz frames must not alternate between a frozen pose and a jump");
+  assert.ok(Math.max(...moves) / Math.min(...moves) < 1.2, "Steady movement has even frame-to-frame travel");
+  assert.equal(sent.length, 32, "Presentation does not raise the network or authoritative simulation rate");
+  assert.deepEqual(server.capture(), authority, "Intermediate drawing never changes authoritative gameplay");
+});
+
+test("fractional prediction follows slow motion and preserves the shown pose during reconciliation", () => {
+  const server = createGame({ mode: "practice", mineCount: 0 });
+  Object.assign(server.state.players[0], { vx: 240, vy: -120, angularVelocity: 2 });
+  server.state.resolution = {
+    affectedPlayerIds: [], pendingDamage: {}, drownedPlayerIds: [], focus: null,
+    reveal: null, slowMotionRemaining: 0.2, impact: 0.5,
+  };
+  server.state.projectiles = [{ id: "shot", ownerId: "p1", kind: "grenade", x: 100, y: 200,
+    vx: 360, vy: -120, life: 2, age: 0, radius: 5, damage: 20 }];
+  const client = new ClientPrediction(() => assert.fail("A half-step must not send a full input frame"));
+  const authority = snapshot(server);
+  client.receive(authority, "p1", 0);
+  const dt = NETWORK_STEP / 2;
+  const shown = client.advance(dt, dt * 1000)!;
+  assert.equal(shown.players[0].x, authority.players[0].x + 240 * dt * 0.28);
+  assert.equal(shown.players[0].y, authority.players[0].y - 120 * dt * 0.28);
+  assert.ok(Math.abs(shown.players[0].rotation - authority.players[0].rotation - 2 * dt * 0.28) < 1e-10);
+  assert.equal(shown.projectiles[0].x, 100 + 360 * dt * 0.28);
+  assert.deepEqual(snapshot(server), authority);
+  server.state.players[0].x += 40;
+  server.state.players[0].hp = 80;
+  client.receive(snapshot(server), "p1", 9);
+  const reconciled = client.advance(0, 9)!;
+  assert.equal(reconciled.players[0].x, shown.players[0].x,
+    "A mid-frame server correction accounts for the fractional drawing offset");
+  assert.equal(reconciled.players[0].hp, 80, "Only the pose is smoothed; health is authoritative immediately");
+  assert.equal(client.pendingCount, 0);
+});
+
 test("a predicted end of control locks commands before the server acknowledges it", () => {
-  const server = new GameEngine({ mode: "practice" });
+  const server = createGame({ mode: "practice" });
   server.state.players[0].vy = -300;
   server.state.players[0].grounded = false;
   const sent: InputFrame[] = [];
@@ -73,7 +129,7 @@ test("a predicted end of control locks commands before the server acknowledges i
 });
 
 test("acknowledged actions are removed and unacknowledged actions replay exactly once", () => {
-  const server = new GameEngine({ mode: "practice", seed: 31 });
+  const server = createGame({ mode: "practice", seed: 31 });
   const sent: InputFrame[] = [];
   const client = new ClientPrediction((frame) => sent.push(frame));
   client.receive(snapshot(server), "p1", 0);
@@ -94,7 +150,7 @@ test("acknowledged actions are removed and unacknowledged actions replay exactly
 });
 
 test("correction restores server health and inventory immediately while smoothing only the drawing pose", () => {
-  const server = new GameEngine({ mode: "practice" });
+  const server = createGame({ mode: "practice" });
   const sent: InputFrame[] = [];
   const client = new ClientPrediction((frame) => sent.push(frame));
   client.receive(snapshot(server), "p1", 0);
@@ -115,7 +171,7 @@ test("correction restores server health and inventory immediately while smoothin
 });
 
 test("spectators interpolate trajectories, angular attitude, rope length, mines and projectile fuses", () => {
-  const game = new GameEngine();
+  const game = createGame();
   const a = structuredClone(game.state);
   a.players[0].rotation = Math.PI - 0.1;
   a.players[0].rope = { x: 200, y: 100, length: 150, bends: [{ x: 201, y: 120 }] };
@@ -147,7 +203,7 @@ test("spectators interpolate trajectories, angular attitude, rope length, mines 
 });
 
 test("spectators smooth the damage reveal but debit HP and change recipients together", () => {
-  const a = structuredClone(new GameEngine().state);
+  const a = structuredClone(createGame().state);
   a.phase = "damage";
   a.resolution = {
     affectedPlayerIds: ["p1", "p2"], pendingDamage: { p1: 25, p2: 40 },
@@ -183,7 +239,7 @@ test("spectators smooth the damage reveal but debit HP and change recipients tog
 });
 
 test("spectators do not anticipate a new explosion's camera impact", () => {
-  const a = structuredClone(new GameEngine().state);
+  const a = structuredClone(createGame().state);
   a.resolution = { affectedPlayerIds: [], pendingDamage: {}, drownedPlayerIds: [],
     focus: null, reveal: null, slowMotionRemaining: 0, impact: 0 };
   const b = structuredClone(a);
@@ -195,7 +251,7 @@ test("spectators do not anticipate a new explosion's camera impact", () => {
 });
 
 test("watchers never run prediction or extrapolate across an interrupted snapshot stream", () => {
-  const server = new GameEngine({ mode: "practice" });
+  const server = createGame({ mode: "practice" });
   const sent: InputFrame[] = [];
   const client = new ClientPrediction((frame) => sent.push(frame));
   client.receive(snapshot(server), "p2", 0);
@@ -216,8 +272,39 @@ test("watchers never run prediction or extrapolate across an interrupted snapsho
   assert.equal(client.advance(0, 5300)!.players[0].x, server.state.players[0].x);
 });
 
+test("watching a bot stays continuous at 120 Hz despite uneven snapshot arrival", () => {
+  const server = createGame();
+  const client = new ClientPrediction(() => assert.fail("Watching a bot cannot send predicted input"));
+  const initial = snapshot(server);
+  initial.players[0].x = 1000;
+  client.receive(initial, "p2", 0);
+  const packets = Array.from({ length: 30 }, (_, index) => {
+    const time = (index + 1) * 0.05;
+    const state = structuredClone(initial);
+    state.net!.simulation.elapsed = time;
+    state.net!.tick = Math.round(time / FIXED_STEP);
+    state.players[0].x = 1000 + time * 240;
+    return { at: time + [0, 0.035, 0.015][index % 3], state };
+  });
+  let previous = initial.players[0].x;
+  for (let frame = 1; frame <= 168; frame++) {
+    const time = frame / 120;
+    while (packets[0]?.at <= time) {
+      const packet = packets.shift()!;
+      client.receive(packet.state, "p2", packet.at * 1000);
+    }
+    const shown = client.advance(1 / 120, time * 1000)!;
+    if (time > 0.3) {
+      const distance = shown.players[0].x - previous;
+      assert.ok(distance > 1.5 && distance < 2.5, "Buffered movement does not freeze or jump with packets");
+    }
+    previous = shown.players[0].x;
+  }
+  assert.equal(client.isPredicting, false);
+});
+
 test("out-of-order states, turn switches, reconnects and restarts cannot replay stale commands", () => {
-  const server = new GameEngine({ mode: "practice" });
+  const server = createGame({ mode: "practice" });
   const sent: InputFrame[] = [];
   const client = new ClientPrediction((frame) => sent.push(frame));
   const old = snapshot(server);
@@ -239,7 +326,7 @@ test("out-of-order states, turn switches, reconnects and restarts cannot replay 
   client.advance(NETWORK_STEP, 140);
   assert.equal(sent.length, 1);
   client.reset();
-  client.receive(snapshot(new GameEngine({ mode: "practice" }), 42, "new-match"), "p1", 200);
+  client.receive(snapshot(createGame({ mode: "practice" }), 42, "new-match"), "p1", 200);
   client.advance(NETWORK_STEP, 220);
   assert.equal(sent.at(-1)!.seq, 43);
   assert.equal(sent.at(-1)!.commands.length, 0);
@@ -250,14 +337,14 @@ test("out-of-order states, turn switches, reconnects and restarts cannot replay 
 test("input history stays bounded when acknowledgements stop", () => {
   const sent: InputFrame[] = [];
   const client = new ClientPrediction((frame) => sent.push(frame));
-  client.receive(snapshot(new GameEngine({ mode: "practice" })), "p1", 0);
+  client.receive(snapshot(createGame({ mode: "practice" })), "p1", 0);
   for (let i = 0; i < 500; i++) client.advance(NETWORK_STEP, i * 17);
   assert.equal(client.pendingCount, MAX_PENDING_FRAMES);
   assert.equal(sent.length, MAX_PENDING_FRAMES);
 });
 
 test("latency and ordered jitter preserve one shot, authoritative damage and eventual acknowledgement", () => {
-  const server = new GameEngine({ mode: "practice", seed: 431 });
+  const server = createGame({ mode: "practice", seed: 431 });
   // Keep the practice arsenal, but do not refill it after the outcome sequence.
   server.state.mode = "versus";
   server.state.platforms = [{ id: "floor", x: 0, y: 1600, w: 4320, h: 200 }];
@@ -318,13 +405,13 @@ test("latency and ordered jitter preserve one shot, authoritative damage and eve
 });
 
 test("mid-flight checkpoint replay reproduces seeded cluster bomblets and explosion damage", () => {
-  const first = new GameEngine({ mode: "practice", seed: 911 });
+  const first = createGame({ mode: "practice", seed: 911 });
   first.setInput("p1", { ...input, aimX: 1000, aimY: 1000 });
   first.command("p1", { type: "selectWeapon", weapon: "cluster" });
   first.command("p1", { type: "fire", power: 0.8 });
   for (let i = 0; i < 60; i++) first.step(NETWORK_STEP);
   assert.ok(first.state.projectiles.length > 0);
-  const resumed = new GameEngine();
+  const resumed = createGame();
   resumed.restore(first.capture());
   let sawBomblets = false;
   for (let i = 0; i < 300; i++) {

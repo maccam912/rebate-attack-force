@@ -1,6 +1,6 @@
+import { singleFrogGame } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GameEngine } from "../shared/game.js";
 import { FrogAnimator, frogPose, solveLeg } from "../src/frog.js";
 
 test("two-bone frog legs keep their lengths for reachable, distant, and coincident targets", () => {
@@ -15,7 +15,7 @@ test("two-bone frog legs keep their lengths for reachable, distant, and coincide
 });
 
 test("grounded feet stay planted during stance in either walking direction", () => {
-  const player = new GameEngine().state.players[0];
+  const player = singleFrogGame().state.players[0];
   for (const vx of [-180, 180]) {
     player.vx = vx;
     const feet = [210, 212, 214].map((x) => {
@@ -35,7 +35,7 @@ test("grounded feet stay planted during stance in either walking direction", () 
 });
 
 test("airborne legs trail movement and tuck near the jump apex", () => {
-  const player = new GameEngine().state.players[0];
+  const player = singleFrogGame().state.players[0];
   player.grounded = false;
   player.vy = -450;
   const extended = frogPose(player, []);
@@ -50,7 +50,7 @@ test("airborne legs trail movement and tuck near the jump apex", () => {
 });
 
 test("gaze stays aligned with world aim even while the frog rotates", () => {
-  const player = new GameEngine().state.players[0];
+  const player = singleFrogGame().state.players[0];
   player.rotation = Math.PI / 2;
   player.lookAt = { x: player.x + 100, y: player.y };
   const pose = frogPose(player, []);
@@ -60,7 +60,7 @@ test("gaze stays aligned with world aim even while the frog rotates", () => {
 });
 
 test("the alarmed face appears only near a living opponent and clears when they leave", () => {
-  const players = new GameEngine().state.players;
+  const players = singleFrogGame().state.players;
   const [player, other] = players;
   assert.equal(frogPose(player, players).alarmed, false);
   other.x = player.x + 100;
@@ -74,7 +74,7 @@ test("the alarmed face appears only near a living opponent and clears when they 
 });
 
 test("nearby teammates do not trigger the alarmed face", () => {
-  const players = new GameEngine({ players: [
+  const players = singleFrogGame({ players: [
     { id: "a", name: "Team A", frogs: 2 },
     { id: "b", name: "Team B" },
   ] }).state.players;
@@ -84,7 +84,7 @@ test("nearby teammates do not trigger the alarmed face", () => {
 });
 
 test("diving feet trail above the frog and cosmetic springs preserve leg length without mutating physics", () => {
-  const player = new GameEngine().state.players[0];
+  const player = singleFrogGame().state.players[0];
   player.grounded = false;
   player.vy = 900;
   player.vx = 250;

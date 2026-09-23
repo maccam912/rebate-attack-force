@@ -23,11 +23,11 @@ For friends on the same network, use the network URL printed by Vite. A localhos
 
 ## How it plays
 
-Each player controls a team. Before a local or online match, configure **1–6 frogs** and **1–500 starting HP per frog** separately for each team (default: one frog, 100 HP). A versus turn lasts **45 seconds**. Move and grapple in real time during your turn, pick up weapon crates, and fire **one shot**. Melee and instant blasts end control immediately. Projectiles allow retreat until impact or detonation, for up to **5 seconds**; placing a mine gives the full five seconds. Last team standing wins; simultaneous eliminations can draw. Teams alternate turns, and each team rotates through its living frogs in order. Dead frogs and disconnected teams are skipped. Ammunition belongs to the frog that collected it.
+Each player controls a team. Before a local or online match, configure **1–6 frogs** and **1–500 starting HP per frog** separately for each team (default: three frogs, 100 HP). A versus turn lasts **45 seconds**. Move and grapple in real time during your turn, pick up weapon crates, and fire **one shot**. Melee and instant blasts end control immediately. Projectiles allow retreat until impact or detonation, for up to **5 seconds**; placing a mine gives the full five seconds. Last team standing wins; simultaneous eliminations can draw. Teams alternate turns, and each team rotates through its living frogs in order. Dead frogs and disconnected teams are skipped. Ammunition is shared by every frog on the team that collected it.
 
 After impact, everyone loses control while the camera follows the weapon and flying frogs, widening to show collisions. Brief slow motion and subtle shake accent big hits. Damage accumulates without reducing HP or removing lethally hit frogs from the physics. Once bodies and live weapons settle, the camera visits each damaged frog, pauses, and shows its HP being subtracted. Knocked-out frogs explode for a little nearby damage and knockback; any resulting mayhem settles and gets its own outcome before the turn changes. Water eliminations are also shown before victory or practice respawns.
 
-**Every frog starts with all 48 weapons and limited ammunition. Unused ammunition carries across turns.** Mystery crates resupply a randomly chosen weapon; every box looks identical and its contents are revealed only after pickup. You may collect multiple crates and select any stocked weapon. Carrying a weapon lets you attack on a later turn without finding another crate. The one-shot limit still applies.
+**Versus teams start with an empty inventory. Unused ammunition carries across turns and is shared by all teammates.** Every mystery crate rolls a random weapon when collected; you cannot choose its reward. Repeat weapons add more ammunition. You may collect multiple crates, then press B / Arsenal on your turn to select any stocked weapon from your team’s inventory. A teammate can use saved ammo without collecting another crate. Practice keeps all 48 weapons available and refills them each turn. The one-shot limit still applies.
 
 | Control | Action |
 | --- | --- |
@@ -58,7 +58,17 @@ On a phone or touch device, the game automatically shows a thumb control deck an
 
 You can move, aim, and use an action with separate fingers. Opening the menu or arsenal or changing turns clears held controls and cancels a charged shot. An interrupted Fire touch also cancels the shot.
 
-The scrapyard spans **4,320 × 1,800 world pixels**, with 29 platforms, elevated supply routes, and a camera that follows the active frog. Extra teams start on separate ledges; very large rosters add more scrapyard sections horizontally so teams do not share spawn positions. Edge markers point toward opponents outside the view.
+Choose a map in practice, local setup, or the online lobby. Each has a thumbnail and **View full map** preview drawn from its playable terrain. The online host chooses for everyone, and rematches keep the same map.
+
+| Map | Size | Terrain |
+| --- | --- | --- |
+| Scrapyard | Medium · 4,320 × 1,800 | Original rectangular islands and elevated ledges over water |
+| Pocket Yard | Small · 2,200 × 1,200 | Compact square platforms and a solid, dry floor |
+| Crystal Hollow | Medium · 3,400 × 1,700 | Enclosed crystal cavern with a ceiling, walls, and no water |
+| Razor Reef | Large · 4,000 × 2,050 | Narrow sea stacks, stepping stones, and dangerous water gaps |
+| Wild Canopy | Large · 5,600 × 2,300 | Jungle trees, branches, and stationary tortoise and crocodile platforms above a river |
+
+The camera follows the active frog. Extra teams start on separate ledges; very large rosters extend the selected layout horizontally so teams do not share spawn positions. Edge markers point toward opponents outside the view.
 
 Aiming guides appear only while you control the active frog. Everyone can see that frog's eyes follow its aim, and frogs make an alarmed face when a living opponent comes within 160 world pixels. Jointed hind legs plant and step while walking, tuck near a jump's apex, and trail behind velocity, even during downward dives. Local spring animation adds leg flutter without affecting collisions. Fast launches widen the eyes; impacts squash the body.
 
@@ -103,7 +113,7 @@ Surface hazards land on reachable platform tops, while gravity wells, repulsors,
 
 Mines persist across turns. Mines deployed as weapons arm only after their deployment turn. Only the active frog approaching within visible range starts the warning fuse, including the owner on a later turn. Untriggered traps do not hold up turn changes. The spring mine sacrifices direct damage for a huge upward launch and the resulting fall.
 
-Online, the active player runs the same simulation locally with sequenced input and command prediction. Server checkpoints acknowledge inputs; the client restores authoritative state and replays pending input, smoothing small visible corrections and snapping large corrections or life-state changes. Other players use a 120 ms snapshot interpolation buffer for bodies, ropes, projectiles, traps, and effects. They do not independently predict remote combat. Server time, damage, inventory, and turns remain authoritative; client poses and clocks are never accepted. Reconnecting and turn changes reset prediction history.
+Online, the active player runs the same simulation locally with sequenced input and command prediction. Server checkpoints acknowledge inputs; the client restores authoritative state and replays pending input, smoothing small visible corrections and snapping large corrections or life-state changes. Drawing fills the fraction between network steps so high-refresh displays show continuous movement without increasing the input rate or changing combat decisions. Other players use a 120 ms snapshot interpolation buffer for bodies, ropes, projectiles, traps, and effects. They do not independently predict remote combat. Server time, damage, inventory, and turns remain authoritative; client poses and clocks are never accepted. Reconnecting and turn changes reset prediction history.
 
 ## Deploy to Kubernetes
 

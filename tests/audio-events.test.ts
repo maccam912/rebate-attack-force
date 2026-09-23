@@ -1,3 +1,4 @@
+import { singleFrogGame, stockWeapons } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FIXED_STEP, GameEngine, MAX_SOUND_EVENTS, PLAYER_RADIUS, WATER_Y, WIDTH } from "../shared/game.js";
@@ -12,7 +13,7 @@ function advance(game: GameEngine, seconds: number): void {
   for (let frame = 0; frame < Math.ceil(seconds / FIXED_STEP); frame++) game.step(FIXED_STEP);
 }
 function arena() {
-  const game = new GameEngine({ mode: "practice", seed: 123 });
+  const game = singleFrogGame({ mode: "practice", seed: 123 });
   game.state.platforms = [{ id: "floor", x: 0, y: 1000, w: WIDTH, h: 800 }];
   game.state.crates = [];
   const [a, b] = game.state.players;
@@ -42,7 +43,7 @@ test("every successful weapon action emits exactly one persistent shot, includin
 });
 
 test("invalid actions stay silent and jump, backflip, grapple and release record successful transitions", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const a = game.state.players[0];
   assert.equal(game.command(a.id, { type: "release" }), false);
   assert.equal(game.command("p2", { type: "jump" }), false);
@@ -60,7 +61,7 @@ test("invalid actions stay silent and jump, backflip, grapple and release record
 });
 
 test("practice water death preserves the splash, outcome and later respawn sequence", () => {
-  const game = new GameEngine({ mode: "practice" });
+  const game = singleFrogGame({ mode: "practice" });
   const a = game.state.players[0];
   a.x = 25;
   a.y = WATER_Y - PLAYER_RADIUS;
@@ -142,8 +143,10 @@ test("mine arming, triggering and detonation each emit one cue", () => {
 });
 
 test("sound history is bounded, replayable and independent of gameplay IDs and random choices", () => {
-  const noisy = new GameEngine({ seed: 456 });
-  const quiet = new GameEngine({ seed: 456 });
+  const noisy = singleFrogGame({ seed: 456 });
+  const quiet = singleFrogGame({ seed: 456 });
+  stockWeapons(noisy);
+  stockWeapons(quiet);
   for (let i = 0; i < MAX_SOUND_EVENTS + 40; i++)
     noisy.command("p1", { type: "selectWeapon", weapon: i % 2 ? "rocket" : "bat" });
   assert.equal(noisy.state.soundEvents!.length, MAX_SOUND_EVENTS);
@@ -168,7 +171,7 @@ test("sound history is bounded, replayable and independent of gameplay IDs and r
 });
 
 test("older snapshots acquire sound fields and match completion plays victory only once", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   delete game.state.soundEvents;
   delete game.state.soundSequence;
   const a = game.state.players[0];

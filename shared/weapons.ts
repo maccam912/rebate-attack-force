@@ -96,5 +96,5 @@ export const WEAPON_IDS: WeaponId[] = WEAPONS.map((definition) => definition.id)
 export const WEAPON_CATALOG = Object.fromEntries(WEAPONS.map((definition) => [definition.id, definition])) as Record<WeaponId, WeaponDefinition>;
 export const WEAPON_DEFS = WEAPON_CATALOG;
 export function createInventory(mode: GameMode = "versus"): Record<WeaponId, number> {
-  return Object.fromEntries(WEAPONS.map((definition) => [definition.id, mode === "practice" ? 9 : definition.ammo])) as Record<WeaponId, number>;
+  return Object.fromEntries(WEAPONS.map((definition) => [definition.id, mode === "practice" ? 9 : 0])) as Record<WeaponId, number>;
 }

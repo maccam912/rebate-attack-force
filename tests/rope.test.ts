@@ -1,6 +1,7 @@
+import { singleFrogGame } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GameEngine, FIXED_STEP } from "../shared/game.js";
+import { FIXED_STEP } from "../shared/game.js";
 import { ropePathLength, ropeSegmentBlocked, updateRopePath } from "../shared/rope.js";
 import type { Platform, Point, Rope } from "../shared/types.js";
 
@@ -48,7 +49,7 @@ test("ropes route around multiple solids and touching terrain", () => {
 });
 
 test("wrapping, reeling, and releasing use the entire routed rope length", () => {
-  const game = new GameEngine({ mode: "practice" });
+  const game = singleFrogGame({ mode: "practice" });
   game.state.platforms = [shelf, { id: "floor", x: 0, y: 1000, w: 4320, h: 800 }];
   const player = game.state.players[0]!;
   Object.assign(player, { x: 600, y: 550, vx: 100, vy: 0, grounded: false,

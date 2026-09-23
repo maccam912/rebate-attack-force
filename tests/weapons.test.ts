@@ -1,3 +1,4 @@
+import { singleFrogGame, stockWeapons } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FIXED_STEP, GameEngine, PLAYER_RADIUS, WIDTH } from "../shared/game.js";
@@ -9,7 +10,8 @@ function advance(game: GameEngine, seconds: number): void {
   for (let frame = 0; frame < Math.ceil(seconds / FIXED_STEP); frame++) game.step(FIXED_STEP);
 }
 function arena(mode: GameMode = "practice") {
-  const game = new GameEngine({ mode, seed: 123 });
+  const game = singleFrogGame({ mode, seed: 123 });
+  if (mode === "versus") stockWeapons(game);
   game.state.platforms = [{ id: "floor", x: 0, y: 1000, w: WIDTH, h: 800 }];
   game.state.crates = [];
   const [a, b] = game.state.players;
@@ -24,13 +26,13 @@ function fire(game: GameEngine, weapon: WeaponId, aimX = 1200, aimY = 500, power
   assert.equal(game.command(id, { type: "fire", power }), true);
 }
 
-test("the complete arsenal is stocked in normal matches and refilled each practice turn", () => {
+test("versus teams start empty while practice stocks and refills the complete arsenal", () => {
   assert.equal(new Set(WEAPON_IDS).size, WEAPON_IDS.length, "weapon IDs are unique");
   assert.ok(WEAPON_IDS.length >= 48, "the expanded arsenal remains available");
-  const normal = new GameEngine();
+  const normal = singleFrogGame();
   for (const player of normal.state.players) {
     assert.deepEqual(player.inventory, createInventory());
-    for (const weapon of WEAPON_IDS) assert.ok(player.inventory[weapon] > 0);
+    for (const weapon of WEAPON_IDS) assert.equal(player.inventory[weapon], 0);
   }
   const { game, a } = arena();
   fire(game, "golf");
@@ -240,22 +242,26 @@ test("shotgun fans seven pellets and the returning boomerang reverses its horizo
   assert.ok(boomerang.game.state.projectiles[0].vx < 0);
 });
 
-test("random mystery crate contents are deterministic by seed and vary between turns", () => {
-  const a = new GameEngine({ seed: 73 }), b = new GameEngine({ seed: 73 });
-  const before = a.state.crates.map((c) => c.weapon);
-  assert.deepEqual(before, b.state.crates.map((c) => c.weapon));
-  assert.ok(new Set(before).size > 8);
-  a.command(a.state.activePlayerId, { type: "endTurn" });
-  advance(a, 0.1);
-  assert.notDeepEqual(before, a.state.crates.map((c) => c.weapon));
-  const player = a.state.players.find((p) => p.id === a.state.activePlayerId)!;
-  const crate = a.state.crates[0];
-  const original = player.inventory[crate.weapon];
-  crate.x = player.x;
-  crate.y = player.y;
-  a.step(FIXED_STEP);
-  assert.equal(player.inventory[crate.weapon], original + WEAPON_CATALOG[crate.weapon].ammo);
-  assert.match(a.state.message, new RegExp(WEAPON_CATALOG[crate.weapon].name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+test("mystery rewards are hidden until pickup, independently rolled, and deterministic by seed", () => {
+  const collect = (seed: number) => {
+    const game = singleFrogGame({ seed });
+    const player = game.state.players[0];
+    assert.ok(game.state.crates.every((crate) => !("weapon" in crate)), "unopened crates never advertise a reward");
+    for (let index = 0; index < 24; index++) {
+      game.state.crates = [{ id: `mystery-${index}`, x: player.x, y: player.y }];
+      game.step(FIXED_STEP);
+      const awarded = game.state.soundEvents!.filter((event) => event.kind === "pickup").at(-1)!.weapon!;
+      assert.ok(game.state.message.includes(WEAPON_CATALOG[awarded].name), "pickup reveals the actual award");
+    }
+    const rewards = game.state.soundEvents!.filter((event) => event.kind === "pickup").map((event) => event.weapon!);
+    for (const weapon of WEAPON_IDS)
+      assert.equal(player.inventory[weapon], rewards.filter((reward) => reward === weapon).length * WEAPON_CATALOG[weapon].ammo);
+    return rewards;
+  };
+  const first = collect(73);
+  assert.ok(new Set(first).size > 8);
+  assert.deepEqual(first, collect(73));
+  assert.notDeepEqual(first, collect(74));
 });
 
 test("all weapon simulations, including split shells and traps, match at different render rates", () => {

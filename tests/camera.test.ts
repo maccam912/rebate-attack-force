@@ -4,8 +4,12 @@ import { GameEngine } from "../shared/game.js";
 import type { GameState } from "../shared/types.js";
 import { followCamera, screenToWorld } from "../src/camera.js";
 
+const cameraState = () => new GameEngine({
+  players: [{ id: "p1", name: "Moss", frogs: 1 }, { id: "p2", name: "Tangerine", frogs: 1 }],
+}).state;
+
 test("the camera follows movement, clamps at world edges, and switches active players", () => {
-  const state = new GameEngine().state;
+  const state = cameraState();
   const start = followCamera(null, state, 1440, 900, 1 / 60);
   assert.ok(start.width < state.width / 3);
   state.players[0].x = 1900;
@@ -25,7 +29,7 @@ test("the camera follows movement, clamps at world edges, and switches active pl
 });
 
 test("large moves of the same target pan smoothly at different frame rates", () => {
-  const state = new GameEngine().state;
+  const state = cameraState();
   const frog = state.players.find((p) => p.id === state.activePlayerId)!;
   const start = followCamera(null, state, 1280, 800, 1 / 60);
   frog.x = state.width - 500;
@@ -47,7 +51,7 @@ test("large moves of the same target pan smoothly at different frame rates", () 
 });
 
 test("aim conversion respects camera translation, zoom, and resized viewports", () => {
-  const state = new GameEngine().state;
+  const state = cameraState();
   for (const [width, height] of [[1440, 900], [390, 844], [844, 390], [2560, 1440]]) {
     const camera = followCamera(null, state, width, height, 1 / 60);
     const point = screenToWorld(camera, { x: width / 2, y: height / 2 });
@@ -58,7 +62,7 @@ test("aim conversion respects camera translation, zoom, and resized viewports", 
 });
 
 test("touch cameras keep the frog visible with room to aim above the control deck", () => {
-  const state = new GameEngine().state;
+  const state = cameraState();
   for (const [width, height] of [[320, 352], [390, 628], [844, 224]]) {
     const camera = followCamera(null, state, width, height, 1 / 60, true);
     const frog = state.players[0];
@@ -91,7 +95,7 @@ function visible(camera: ReturnType<typeof followCamera>, point: { x: number; y:
 }
 
 test("retreat frames the shooter and travelling weapon, then the payoff follows the weapon", () => {
-  const state = new GameEngine().state;
+  const state = cameraState();
   const start = followCamera(null, state, 1280, 800, 1 / 60);
   const grenade = { id: "shot", ownerId: state.activePlayerId, kind: "grenade" as const,
     x: 1750, y: 1000, vx: 300, vy: 150, life: 2, radius: 100, damage: 40 };
@@ -110,7 +114,7 @@ test("retreat frames the shooter and travelling weapon, then the payoff follows 
 });
 
 test("the impact camera widens to follow scattered frogs including a water landing", () => {
-  const state = new GameEngine().state;
+  const state = cameraState();
   state.phase = "settling";
   const resolution = outcome(state);
   const [left, right] = state.players;
@@ -127,7 +131,7 @@ test("the impact camera widens to follow scattered frogs including a water landi
 });
 
 test("damage recipients get a smooth camera handoff and are framed before subtraction", () => {
-  const state = new GameEngine().state;
+  const state = cameraState();
   const resolution = outcome(state);
   state.phase = "damage";
   Object.assign(state.players[0], { x: 800, y: 1000 });
@@ -156,7 +160,7 @@ test("damage recipients get a smooth camera handoff and are framed before subtra
 });
 
 test("zooming action cameras preserve aim conversion and mobile world bounds", () => {
-  const state = new GameEngine().state;
+  const state = cameraState();
   const resolution = outcome(state);
   resolution.affectedPlayerIds = state.players.map((player) => player.id);
   state.phase = "settling";

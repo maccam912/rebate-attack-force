@@ -3,6 +3,8 @@ import { WEAPON_CATALOG } from "../shared/weapons";
 import { DAMAGE_APPLY_SECONDS } from "../shared/game";
 
 import type { Camera } from "./camera";
+import { getMap } from "../shared/maps";
+import { drawTerrainBackground, drawTerrainPlatform, drawTerrainWater, drawTerrainScenery } from "./terrain-renderer";
 import { FrogAnimator } from "./frog";
 import { drawHazards, drawStatusAura, drawStatusBadges, drawVisionEffects, STATUS_PRESENTATION } from "./effect-renderer";
 
@@ -220,162 +222,6 @@ export function drawFrog(
   c.restore();
 }
 
-function background(c: CanvasRenderingContext2D, s: GameState, t: number) {
-  const grad = c.createLinearGradient(0, 0, 0, s.height);
-  grad.addColorStop(0, "#d3ddba");
-  grad.addColorStop(0.58, "#aebda0");
-  grad.addColorStop(1, "#627f73");
-  c.fillStyle = grad;
-  c.fillRect(0, 0, s.width, s.height);
-  // Paper-grain dots, lazy clouds and a hazy afternoon sun.
-  circle(c, 1155, 147, 79, "#e9e6b6");
-  circle(c, 1155, 147, 62, "#f5e8be");
-  for (let i = 0; i < 130; i++) {
-    const x = (i * 173.1) % s.width,
-      y = (i * 93.7) % s.height;
-    c.fillStyle = i % 2 ? "#ffffff08" : "#233e3407";
-    c.fillRect(x, y, 2, 2);
-  }
-  for (let i = 0; i < 6; i++) {
-    const x = (i * 283 + t * (i % 2 ? 2 : -1) + 160 + s.width) % s.width,
-      y = 95 + ((i * 53) % 220);
-    c.globalAlpha = 0.23;
-    rounded(c, x, y, 126, 16, 9, "#f7f1d0");
-    rounded(c, x + 23, y - 10, 61, 15, 8, "#f7f1d0");
-    c.globalAlpha = 1;
-  }
-  poly(
-    c,
-    [
-      0, 470, 140, 360, 220, 380, 350, 252, 440, 400, 600, 340, 760, 460, 890,
-      330, 1020, 365, 1140, 290, 1280, 380, 1440, 300, 1440, 850, 0, 850,
-    ],
-    "#9aae91",
-  );
-  poly(
-    c,
-    [
-      0, 530, 175, 440, 300, 510, 470, 400, 620, 535, 790, 430, 890, 495, 1060,
-      380, 1200, 510, 1330, 432, 1440, 490, 1440, 850, 0, 850,
-    ],
-    "#889f86",
-  );
-  // Far-off industrial remnants.
-  c.globalAlpha = 0.32;
-  for (const [x, y, w, h] of [
-    [80, 375, 68, 250],
-    [820, 385, 52, 290],
-    [1260, 345, 58, 315],
-  ]) {
-    rounded(c, x, y, w, h, 2, "#52766a");
-    rounded(c, x - 10, y, w + 20, 14, 2, "#52766a");
-    line(c, [x - 10, y + 55, x + w + 10, y + 55], "#406859", 4);
-    for (let a = 0; a < 4; a++)
-      line(
-        c,
-        [x + 8, y + 25 + a * 55, x + w - 8, y + 66 + a * 55],
-        "#a5b79b",
-        2,
-      );
-  }
-  line(c, [0, 320, 245, 375, 540, 328, 920, 380, 1440, 296], "#496e5f", 2);
-  c.globalAlpha = 1;
-  // Cable at the top emphasizes the usable overhead platforms.
-  c.beginPath();
-  c.moveTo(0, 57);
-  c.quadraticCurveTo(720, 155, 1440, 42);
-  c.strokeStyle = "#597b63";
-  c.lineWidth = 2;
-  c.stroke();
-  for (let i = 0; i < 11; i++) {
-    const x = 90 + i * 125,
-      y = 57 + 80 * (x / 1440) * (1 - x / 1440);
-    line(c, [x, y, x, y + 18], "#597b63");
-    circle(c, x, y + 20, 4, i % 3 === 0 ? "#f4d38b" : "#d9d7ac");
-  }
-}
-
-function platform(
-  c: CanvasRenderingContext2D,
-  p: GameState["platforms"][number],
-  idx: number,
-  t: number,
-) {
-  const { x, y, w, h } = p;
-  // Earth is visible and matches the exact collision rectangle.
-  rounded(c, x + 3, y + 8, w, h, 5, "#3a594a");
-  rounded(c, x, y, w, h, 5, "#4e6851", ink);
-  c.save();
-  c.beginPath();
-  c.rect(x, y, w, h);
-  c.clip();
-  for (let row = 0; row < Math.ceil(h / 25); row++)
-    for (let col = 0; col < Math.ceil(w / 58) + 1; col++) {
-      const bx = x + col * 58 - (row % 2) * 29,
-        by = y + row * 25;
-      rounded(
-        c,
-        bx + 3,
-        by + 4,
-        50,
-        18,
-        3,
-        (col + row + idx) % 3 === 0 ? "#52694f" : "#465e49",
-      );
-      if ((col + row) % 4 === 0)
-        line(
-          c,
-          [bx + 15, by + 10, bx + 21, by + 12, bx + 27, by + 9],
-          "#789070",
-          1,
-        );
-    }
-  c.restore();
-  rounded(c, x - 2, y - 2, w + 4, 9, 4, "#adc977", ink);
-  for (let i = 10; i < w - 9; i += 19) {
-    const len = 5 + ((i * 7) % 13);
-    line(c, [x + i, y + 4, x + i - 2, y + len], "#94b169", 3);
-  }
-  for (let i = 15; i < w - 15; i += 46) {
-    const shift = Math.sin(t * 1.2 + i) * 2;
-    line(
-      c,
-      [x + i, y - 2, x + i - 2 + shift, y - 12, x + i + 5 + shift, y - 8],
-      "#537651",
-      2,
-    );
-    if ((i + idx) % 3 === 0)
-      circle(c, x + i - 2 + shift, y - 12, 2.5, "#f0ce81");
-  }
-  // Roots and climbing vines underneath small islands.
-  if (h < 100) {
-    for (let i = 25; i < w - 15; i += 74) {
-      const sway = Math.sin(t + i) * 3;
-      line(
-        c,
-        [x + i, y + h, x + i + 3, y + h + 12, x + i - 4 + sway, y + h + 32],
-        "#567553",
-        2,
-      );
-      c.beginPath();
-      c.ellipse(x + i + 3, y + h + 13, 6, 3, 0.6, 0, 7);
-      c.fillStyle = "#70925b";
-      c.fill();
-    }
-  }
-  if (w > 200) {
-    rounded(c, x + w - 47, y + 15, 32, 17, 2, "#8d9870", "#304f3e");
-    text(
-      c,
-      String(idx + 1).padStart(2, "0"),
-      x + w - 41,
-      y + 28,
-      11,
-      "#2e503d",
-    );
-  }
-}
-
 function crate(
   c: CanvasRenderingContext2D,
   x: number,
@@ -406,35 +252,6 @@ function crate(
   c.restore();
 }
 
-function water(c: CanvasRenderingContext2D, s: GameState, t: number) {
-  const grad = c.createLinearGradient(0, s.waterY, 0, s.height);
-  grad.addColorStop(0, "#82b4a4");
-  grad.addColorStop(1, "#4d847d");
-  c.fillStyle = grad;
-  c.fillRect(0, s.waterY, s.width, s.height - s.waterY);
-  c.beginPath();
-  c.moveTo(0, s.waterY);
-  for (let x = 0; x <= s.width; x += 8)
-    c.lineTo(x, s.waterY + Math.sin(x * 0.025 + t * 1.5) * 3);
-  c.lineTo(s.width, s.height);
-  c.lineTo(0, s.height);
-  c.fillStyle = "#669b8dd0";
-  c.fill();
-  for (let i = 0; i < 48; i++) {
-    const x = (i * 97 + t * (i % 2 ? 4 : -3) + s.width) % s.width,
-      y = s.waterY + 8 + ((i * 19) % 65);
-    line(c, [x, y, x + 12 + (i % 17), y], "#b2d2b550", 2);
-  }
-  for (const x of [80, 385, 1180, 1340]) {
-    const y = s.waterY + 22 + Math.sin(t + x) * 2;
-    c.beginPath();
-    c.ellipse(x, y, 18, 5, -0.2, 0, Math.PI * 1.8);
-    c.lineTo(x, y);
-    c.fillStyle = "#345f4d";
-    c.fill();
-  }
-}
-
 export function renderGame(
   c: CanvasRenderingContext2D,
   s: GameState,
@@ -449,7 +266,7 @@ export function renderGame(
   const backgroundScale = Math.max(viewport.width / 1440, viewport.height / 850);
   c.translate((viewport.width - 1440 * backgroundScale) / 2, (viewport.height - 850 * backgroundScale) / 2);
   c.scale(backgroundScale, backgroundScale);
-  background(c, { ...s, width: 1440, height: 850 }, o.time);
+  drawTerrainBackground(c, { ...s, width: 1440, height: 850 }, o.time);
   c.restore();
   c.scale(camera.zoom, camera.zoom);
   c.translate(-camera.x, -camera.y);
@@ -461,10 +278,12 @@ export function renderGame(
       Math.cos(o.time * 93) * strength,
     );
   }
+  const map = getMap(s.mapId);
+  drawTerrainScenery(c, s, s.platforms, o.time);
   s.platforms.forEach((p, i) => {
     if (p.x + p.w >= camera.x - 40 && p.x <= camera.x + camera.width + 40 &&
         p.y + p.h >= camera.y - 40 && p.y <= camera.y + camera.height + 40)
-      platform(c, p, i, o.time);
+      drawTerrainPlatform(c, p, i, o.time, map.theme);
   });
   drawHazards(c, s, o);
   for (const box of s.crates)
@@ -596,7 +415,7 @@ export function renderGame(
             s.platforms.some(
               (p) => x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h,
             ) ||
-            y >= s.waterY
+            (s.hasWater !== false && y >= s.waterY)
           )
             break;
           circle(c, x, y, 2.5, "#fef6cf");
@@ -794,7 +613,7 @@ export function renderGame(
     }
     c.globalAlpha = 1;
   }
-  water(c, s, o.time);
+  drawTerrainWater(c, s, o.time);
   for (const id of drowned) {
     const frog = s.players.find((player) => player.id === id);
     if (!frog?.alive) continue;

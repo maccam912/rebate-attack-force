@@ -1,3 +1,4 @@
+import { singleFrogGame, stockWeapons } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { BotController } from "../shared/bots.js";
@@ -16,10 +17,10 @@ function onlyWeapon(player: Player, weapon?: WeaponId): void {
   for (const id of WEAPON_IDS) player.inventory[id] = id === weapon ? 1 : 0;
 }
 function arena(frogs = 1) {
-  const game = new GameEngine({ players: [
+  const game = singleFrogGame({ players: [
     { id: "bot", name: "Bot", bot: true, frogs },
     { id: "human", name: "Human" },
-  ] });
+  ], seed: 260 });
   game.state.platforms = [{ id: "floor", x: 0, y: 1000, w: WIDTH, h: 800 }];
   game.state.crates = [];
   const bot = game.state.players[0]!;
@@ -30,7 +31,7 @@ function arena(frogs = 1) {
 }
 
 test("bot updates leave human turns, disconnected bots and invalid elapsed time untouched", () => {
-  const game = new GameEngine({ players: [{ id: "human", name: "Human" }, { id: "bot", name: "Bot", bot: true }] });
+  const game = singleFrogGame({ players: [{ id: "human", name: "Human" }, { id: "bot", name: "Bot", bot: true }] });
   const bots = new BotController();
   const before = game.capture();
   for (let i = 0; i < 100; i++) bots.update(game, FRAME);
@@ -132,7 +133,7 @@ test("an empty bot collects reachable supplies and uses the ammo it picked up", 
   onlyWeapon(bot);
   bot.hasCrate = false;
   bot.weapon = null;
-  game.state.crates = [{ id: "supply", x: 610, y: bot.y, weapon: "sniper" }];
+  game.state.crates = [{ id: "supply", x: 610, y: bot.y }];
   advance(game, controller, 20, () => game.state.turn > 1);
   assert.ok(game.state.soundEvents?.some((event) => event.kind === "pickup" && event.playerId === bot.id));
   assert.ok(game.state.soundEvents?.some((event) => event.kind === "shot" && event.weapon === "sniper"));
@@ -163,7 +164,7 @@ test("a bot balanced over a platform edge can move back onto it and collect supp
     { id: "bot-island", x: 300, y: 1000, w: 400, h: 800 },
     { id: "target-island", x: 900, y: 1000, w: 400, h: 800 },
   ];
-  game.state.crates = [{ id: "supply", x: 410, y: bot.y, weapon: "sniper" }];
+  game.state.crates = [{ id: "supply", x: 410, y: bot.y }];
   advance(game, controller, 20, () => game.state.turn > 1);
   assert.ok(game.state.soundEvents?.some((event) => event.kind === "pickup" && event.playerId === bot.id));
   assert.ok(target.hp < 100);
@@ -172,7 +173,7 @@ test("a bot balanced over a platform edge can move back onto it and collect supp
 
 test("bots damage both distant opposing spawns in the default two-team arena", () => {
   for (const botIndex of [0, 1]) {
-    const game = new GameEngine({ players: [0, 1].map((index) => ({
+    const game = singleFrogGame({ players: [0, 1].map((index) => ({
       id: `team-${index}`, name: `Team ${index}`, bot: index === botIndex,
     })) });
     if (botIndex === 1) {
@@ -182,6 +183,7 @@ test("bots damage both distant opposing spawns in the default two-team arena", (
     const turn = game.state.turn;
     const bot = game.state.players[botIndex]!;
     const target = game.state.players[1 - botIndex]!;
+    stockWeapons(game);
     const inventory = { ...bot.inventory };
     advance(game, new BotController(), 20, () => game.state.turn > turn || game.state.phase === "finished");
     assert.ok(target.hp < 100, `air support must account for the roofs over spawn ${1 - botIndex}`);
@@ -192,11 +194,11 @@ test("bots damage both distant opposing spawns in the default two-team arena", (
 
 test("all-bot matches on the actual arena make damage and finish deterministically", () => {
   const run = () => {
-    const game = new GameEngine({ seed: 913, players: Array.from({ length: 6 }, (_, index) => ({
+    const game = singleFrogGame({ seed: 913, players: Array.from({ length: 6 }, (_, index) => ({
       id: `bot-${index}`, name: `Bot ${index + 1}`, bot: true, frogs: 2,
     })) });
     const bots = new BotController();
-    advance(game, bots, 240, () => game.state.phase === "finished");
+    advance(game, bots, 1800, () => game.state.phase === "finished");
     assert.equal(game.state.phase, "finished");
     assert.ok(game.state.winnerId);
     assert.ok(game.state.turn > 1);

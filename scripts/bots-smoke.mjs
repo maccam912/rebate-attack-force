@@ -42,7 +42,8 @@ try {
   await local.click("#start-button");
   let state = await snapshot(local);
   assert.equal(state.teams[1].bot, true);
-  assert.equal(state.players[1].maxHp, 175);
+  assert.ok(state.players.filter((frog) => frog.teamId === "p2").every((frog) => frog.maxHp === 175));
+  assert.equal(state.players.length, 6);
   await local.click("#end-turn");
   await local.waitForFunction(() => {
     const state = JSON.parse(window.render_game_to_text());
@@ -141,8 +142,12 @@ try {
   }, null, { timeout: 40000 });
   state = await snapshot(host);
   const usedAmmo = state.players.find((player) => player.teamId === bot.id).inventory;
-  assert.ok(Object.keys(initialAmmo).some((weapon) => usedAmmo[weapon] < initialAmmo[weapon]),
-    `The server bot fired a weapon: ${JSON.stringify({ initialBot, finalBot: state.players.find((player) => player.teamId === bot.id), turn: state.turn, phase: state.phase })}`);
+  assert.ok(Object.values(initialAmmo).every((ammo) => ammo === 0), "Bots start with the same empty inventory");
+  assert.ok(Object.values(usedAmmo).some((ammo) => ammo > 0) ||
+    state.soundEvents.some((event) => event.kind === "shot" && event.playerId === initialBot.id),
+    "The server bot collects a random weapon and either saves or uses its ammo");
+  assert.ok(state.players.filter((frog) => frog.teamId === bot.id).every((frog) =>
+    JSON.stringify(frog.inventory) === JSON.stringify(usedAmmo)), "Bot teammates share the stash");
   assert.deepEqual(errors, [], "No browser runtime errors");
   console.log("PASS: host adds/removes bots beyond four teams, configures bots and plays a solo online match with an autonomous bot");
 } finally {

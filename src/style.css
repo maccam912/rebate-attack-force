@@ -16,8 +16,8 @@ button:disabled { cursor: not-allowed; opacity: .4; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
 [hidden] { display: none !important; }
 .arena { position: relative; width: 100%; height: 100%; height: 100dvh; overflow: hidden; background: #a4b895; }
-.arena canvas { display: block; width: 100%; height: 100%; outline: none; cursor: default; touch-action: none; }
-.arena canvas.can-aim { cursor: crosshair; }
+.arena #game { display: block; width: 100%; height: 100%; outline: none; cursor: default; touch-action: none; }
+.arena #game.can-aim { cursor: crosshair; }
 .arena-top-tools { position: absolute; top: max(16px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right)); display: flex; gap: 6px; z-index: 12; }
 .icon-button { width: 36px; height: 36px; padding: 0; color: #edf0d4; background: #173329d9; border: 1px solid #ecf4cd33; font-size: 20px; }
 .icon-button:hover { background: #294b3e; }
@@ -192,7 +192,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   border-top: 1px solid #d0e77e40;
   pointer-events: none;
 }
-#app[data-touch="true"][data-screen="playing"] .arena canvas {
+#app[data-touch="true"][data-screen="playing"] .arena #game {
   height: calc(100% - var(--touch-deck-height));
 }
 #app[data-touch="true"][data-screen="playing"] .touch-controls {

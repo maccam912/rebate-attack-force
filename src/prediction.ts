@@ -194,7 +194,7 @@ export class ClientPrediction {
       for (const frame of this.pending) this.simulate(frame);
       if (!changed && previous) {
         this.corrections.clear();
-        for (const player of this.engine.state.players) {
+        for (const player of this.fractionalState().players) {
           const shown = previous.players.find((candidate) => candidate.id === player.id);
           if (!shown || shown.alive !== player.alive) continue;
           const x = shown.x - player.x, y = shown.y - player.y;
@@ -261,7 +261,7 @@ export class ClientPrediction {
   }
 
   private correctedState(dt: number): GameState {
-    const state = this.engine!.state;
+    const state = this.fractionalState();
     const decay = Math.exp(-18 * dt);
     return {
       ...state,
@@ -278,6 +278,39 @@ export class ClientPrediction {
           rotation: player.rotation + correction.rotation,
         };
       }),
+    };
+  }
+
+  private fractionalState(): GameState {
+    const state = this.engine!.state;
+    // Input/replay remains fixed at 60 Hz. Draw the remaining fraction of that
+    // interval as well, so 120/144 Hz and uneven animation frames do not alternate
+    // between a held pose and a full network-step jump. This short visual lead
+    // never simulates a collision, consumes ammo, or changes the authoritative pose.
+    const dt = this.pending.length < MAX_PENDING_FRAMES ? Math.max(0, this.accumulator) : 0;
+    if (dt < 1e-9 || state.phase === "damage" || state.phase === "finished" || state.phase === "waiting")
+      return state;
+    const slow = Math.min(dt, state.resolution?.slowMotionRemaining ?? 0);
+    const physicalDt = dt - slow * 0.72;
+    const drowned = new Set(state.resolution?.drownedPlayerIds ?? []);
+    return {
+      ...state,
+      players: state.players.map((player) => !player.alive || drowned.has(player.id) ? player : ({
+        ...player,
+        x: player.x + player.vx * physicalDt,
+        y: player.y + player.vy * physicalDt,
+        rotation: player.rotation + player.angularVelocity * physicalDt,
+      })),
+      projectiles: state.projectiles.map((projectile) => ({
+        ...projectile,
+        x: projectile.x + projectile.vx * physicalDt,
+        y: projectile.y + projectile.vy * physicalDt,
+        age: (projectile.age ?? 0) + physicalDt,
+      })),
+      mines: (state.mines ?? []).map((mine) => ({
+        ...mine, x: mine.x + mine.vx * physicalDt, y: mine.y + mine.vy * physicalDt,
+      })),
+      explosions: state.explosions.map((explosion) => ({ ...explosion, age: explosion.age + physicalDt })),
     };
   }
 }

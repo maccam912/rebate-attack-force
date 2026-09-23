@@ -1,3 +1,4 @@
+import { singleFrogGame } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -46,25 +47,30 @@ function walkToFirstCrate(game: GameEngine): void {
   );
 }
 
-test("every frog starts with the arsenal, while each turn still permits exactly one shot", () => {
-  const game = new GameEngine();
-  assert.deepEqual(game.state.players[0]!.inventory, createInventory());
-  assert.equal(game.state.players[0]!.hasCrate, true);
+test("versus starts empty and collected equipment permits exactly one shot per turn", () => {
+  const game = singleFrogGame();
+  const player = game.state.players[0]!;
+  assert.deepEqual(player.inventory, createInventory());
+  assert.equal(player.hasCrate, false);
+  assert.equal(player.weapon, null);
+  assert.equal(game.command("p1", { type: "selectWeapon", weapon: "rocket" }), false);
+  assert.equal(game.command("p1", { type: "fire" }), false);
+  walkToFirstCrate(game);
+  const weapon = player.weapon!;
+  const ammo = player.inventory[weapon];
   game.setInput("p1", input({ aimX: -1000, aimY: -1000 }));
   assert.equal(game.command("p1", { type: "fire" }), true);
-  assert.equal(game.state.phase, "retreat");
-  assert.equal(game.state.timeLeft, RETREAT_SECONDS);
-  assert.equal(game.state.players[0]!.inventory.rocket, 2);
+  assert.equal(player.inventory[weapon], ammo - 1);
   assert.equal(game.command("p1", { type: "fire" }), false);
   advance(game, RETREAT_SECONDS + 3);
   assert.equal(game.state.activePlayerId, "p2");
   assert.equal(game.state.phase, "playing");
-  assert.equal(game.state.players[1]!.hasCrate, true);
-  assert.equal(game.command("p2", { type: "fire" }), true);
+  assert.equal(game.state.players[1]!.hasCrate, false);
+  assert.equal(game.command("p2", { type: "fire" }), false);
 });
 
 test("inactive and unknown players cannot move, jump, end turns, or attack", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const other = game.state.players[1]!;
   const startX = other.x;
   game.setInput("p2", input({ left: true }));
@@ -86,7 +92,7 @@ test("inactive and unknown players cannot move, jump, end turns, or attack", () 
 });
 
 test("gaze follows validated active input and survives a turn handoff", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const [first, second] = game.state.players;
   const originalSecondLook = { ...second.lookAt };
   game.setInput(first.id, input({ aimX: 500, aimY: 1200 }));
@@ -106,7 +112,7 @@ test("gaze follows validated active input and survives a turn handoff", () => {
 });
 
 test("grapple raycast catches solid geometry, reels in, and release preserves momentum", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const player = game.state.players[0]!;
   game.setInput("p1", input({ aimX: 420, aimY: 1400 }));
   assert.equal(game.command("p1", { type: "grapple" }), true);
@@ -140,7 +146,7 @@ test("grapple raycast catches solid geometry, reels in, and release preserves mo
 });
 
 test("grapple rejects empty sky and geometry outside maximum range", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   game.state.platforms = [{ id: "test-lookout", x: 600, y: 290, w: 240, h: 32 }];
   game.setInput("p1", input({ aimX: 10, aimY: 100 }));
   assert.equal(game.command("p1", { type: "grapple" }), false);
@@ -158,7 +164,7 @@ test("grapple rejects empty sky and geometry outside maximum range", () => {
 });
 
 test("fast falling characters cannot tunnel through thin shelves", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const player = game.state.players[0]!;
   player.x = 420;
   player.y = 1335;
@@ -172,7 +178,7 @@ test("fast falling characters cannot tunnel through thin shelves", () => {
 });
 
 test("water eliminates a player and resolves the winner after showing its outcome", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   game.state.players[0]!.x = 25;
   game.state.players[0]!.y = WATER_Y - PLAYER_RADIUS;
   game.step(FIXED_STEP);
@@ -185,7 +191,7 @@ test("water eliminates a player and resolves the winner after showing its outcom
 });
 
 test("a departed active room member is eliminated and play advances to a survivor", () => {
-  const game = new GameEngine({
+  const game = singleFrogGame({
     players: [
       { id: "a", name: "A" },
       { id: "b", name: "B" },
@@ -202,7 +208,7 @@ test("a departed active room member is eliminated and play advances to a survivo
 });
 
 test("practice respawns drowned players and always returns control to its first player", () => {
-  const game = new GameEngine({ mode: "practice" });
+  const game = singleFrogGame({ mode: "practice" });
   game.state.players[0]!.x = 25;
   game.state.players[0]!.y = WATER_Y - PLAYER_RADIUS;
   advance(game, 3);
@@ -232,7 +238,7 @@ test("practice respawns drowned players and always returns control to its first 
 });
 
 test("invalid inputs cannot introduce NaN, infinity, or an unbounded simulation jump", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   game.setInput("p1", input({ aimX: Number.NaN, aimY: Infinity }));
   game.command("p1", { type: "grapple" });
   walkToFirstCrate(game);
@@ -249,8 +255,8 @@ test("invalid inputs cannot introduce NaN, infinity, or an unbounded simulation 
 });
 
 test("the simulation produces the same state at different rendering frame rates", () => {
-  const a = new GameEngine({ seed: 12 });
-  const b = new GameEngine({ seed: 12 });
+  const a = singleFrogGame({ seed: 12 });
+  const b = singleFrogGame({ seed: 12 });
   a.setInput("p1", input({ right: true }));
   b.setInput("p1", input({ right: true }));
   for (let frame = 0; frame < 120; frame++) a.step(1 / 60);
@@ -259,7 +265,7 @@ test("the simulation produces the same state at different rendering frame rates"
 });
 
 test("point blank rockets hit nearby enemies instead of skipping past their body", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const shooter = game.state.players[0]!;
   const target = game.state.players[1]!;
   target.x = shooter.x + 25;
@@ -276,7 +282,7 @@ test("point blank rockets hit nearby enemies instead of skipping past their body
 });
 
 test("grenades arc, bounce off terrain, and explode when their fuse expires", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const player = game.state.players[0]!;
   player.weapon = "grenade";
   player.hasCrate = true;
@@ -301,7 +307,7 @@ test("grenades arc, bounce off terrain, and explode when their fuse expires", ()
 });
 
 test("pulse is a short-range directional blast that spares its owner", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const player = game.state.players[0]!;
   const target = game.state.players[1]!;
   target.x = player.x + 130;
@@ -318,15 +324,16 @@ test("pulse is a short-range directional blast that spares its owner", () => {
 });
 
 test("the turn deadline switches players and preserves unused ammunition", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   walkToFirstCrate(game);
-  const rocketAmmo = game.state.players[0]!.inventory.rocket;
+  const weapon = game.state.players[0]!.weapon!;
+  const savedAmmo = game.state.players[0]!.inventory[weapon];
   game.state.timeLeft = 0.01;
   advance(game, 1);
   assert.equal(game.state.activePlayerId, "p2");
   assert.equal(game.state.turn, 2);
-  assert.equal(game.state.players[0]!.inventory.rocket, rocketAmmo);
-  assert.equal(game.state.players[0]!.weapon, "rocket");
+  assert.equal(game.state.players[0]!.inventory[weapon], savedAmmo);
+  assert.equal(game.state.players[0]!.weapon, weapon);
   assert.equal(game.command("p2", { type: "endTurn" }), true);
   advance(game, 0.1);
   assert.equal(game.state.activePlayerId, "p1");
@@ -337,11 +344,11 @@ test("the turn deadline switches players and preserves unused ammunition", () =>
     true,
     "saved ammo can be fired without finding another crate",
   );
-  assert.equal(game.state.players[0]!.inventory.rocket, rocketAmmo - 1);
+  assert.equal(game.state.players[0]!.inventory[weapon], savedAmmo - 1);
 });
 
 test("skipping a turn preserves saved ammo and the selected weapon", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   walkToFirstCrate(game);
   const player = game.state.players[0]!;
   player.inventory.grenade = 2;
@@ -361,39 +368,38 @@ test("skipping a turn preserves saved ammo and the selected weapon", () => {
   assert.equal(player.hasCrate, true);
 });
 
-test("crates resupply ammo, selection spends one round, and spare ammo cannot grant a second shot", () => {
-  const game = new GameEngine();
+test("each mystery pickup adds a random weapon and spare ammo cannot grant a second shot", () => {
+  const game = singleFrogGame({ seed: 73 });
   const player = game.state.players[0]!;
-  // Exercise an exhausted pack independently of the generous starting loadout.
-  for (const weapon of Object.keys(player.inventory) as (keyof typeof player.inventory)[]) player.inventory[weapon] = 0;
-  player.weapon = null;
-  player.hasCrate = false;
   game.state.crates = [
-    { id: "extra-rocket", x: player.x, y: player.y, weapon: "rocket" },
-    { id: "extra-grenade", x: player.x, y: player.y, weapon: "grenade" },
+    { id: "first-mystery", x: player.x, y: player.y },
+    { id: "second-mystery", x: player.x, y: player.y },
   ];
   game.step(FIXED_STEP);
-  assert.equal(player.inventory.rocket, WEAPON_CATALOG.rocket.ammo);
-  assert.equal(player.inventory.grenade, WEAPON_CATALOG.grenade.ammo);
-  assert.equal(player.weapon, "rocket");
-  assert.equal(game.command("p1", { type: "selectWeapon", weapon: "pulse" }), false);
-  assert.equal(game.command("p1", { type: "selectWeapon", weapon: "grenade" }), true);
-  player.inventory.grenade = 1;
+  const rewards = game.state.soundEvents!.filter((event) => event.kind === "pickup").map((event) => event.weapon!);
+  assert.equal(rewards.length, 2);
+  assert.notEqual(rewards[0], rewards[1], "this seed rolls independently for both pickups");
+  for (const reward of rewards) assert.equal(player.inventory[reward], WEAPON_CATALOG[reward].ammo);
+  const missing = Object.keys(player.inventory).find((weapon) => player.inventory[weapon as keyof typeof player.inventory] === 0)!;
+  assert.equal(game.command("p1", { type: "selectWeapon", weapon: missing as keyof typeof player.inventory }), false);
+  assert.equal(game.command("p1", { type: "selectWeapon", weapon: rewards[1] }), true);
+  player.inventory[rewards[1]] = 1;
   game.setInput("p1", input({ aimX: 600, aimY: 350 }));
   assert.equal(game.command("p1", { type: "fire" }), true);
-  assert.equal(player.inventory.grenade, 0);
-  assert.equal(player.inventory.rocket, WEAPON_CATALOG.rocket.ammo);
-  assert.equal(player.weapon, "rocket", "exhausted weapons fall back to stocked ammunition");
+  assert.equal(player.inventory[rewards[1]], 0);
+  assert.equal(player.inventory[rewards[0]], WEAPON_CATALOG[rewards[0]].ammo);
+  assert.equal(player.weapon, rewards[0], "exhausted weapons fall back to stocked ammunition");
   assert.equal(player.hasCrate, false);
   assert.equal(game.command("p1", { type: "fire" }), false);
-  assert.equal(game.command("p1", { type: "selectWeapon", weapon: "rocket" }), false);
-  game.state.crates.push({ id: "retreat-supply", x: player.x, y: player.y, weapon: "rocket" });
+  assert.equal(game.command("p1", { type: "selectWeapon", weapon: rewards[0] }), false);
+  const inventory = { ...player.inventory };
+  game.state.crates.push({ id: "retreat-supply", x: player.x, y: player.y });
   game.step(FIXED_STEP);
-  assert.equal(player.inventory.rocket, WEAPON_CATALOG.rocket.ammo, "retreat cannot collect another crate and rearm");
+  assert.deepEqual(player.inventory, inventory, "retreat cannot collect another crate and rearm");
 });
 
 test("a killing blast keeps simulating its airborne survivor and can produce a draw", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   const shooter = game.state.players[0]!;
   const target = game.state.players[1]!;
   Object.assign(shooter, {
@@ -422,7 +428,7 @@ test("a killing blast keeps simulating its airborne survivor and can produce a d
 });
 
 test("a complete match progresses through reachable crates, attacks, turns, and a winner", () => {
-  const game = new GameEngine({ seed: 5 });
+  const game = singleFrogGame({ seed: 5 });
   // A clear combat lane keeps this lifecycle test independent of map traversal.
   game.state.platforms = [
     { id: "west-test-island", x: 60, y: 1600, w: 550, h: 200 },
@@ -447,7 +453,9 @@ test("a complete match progresses through reachable crates, attacks, turns, and 
           : { aimX: target.x, aimY: target.y },
       ),
     );
-    // Stocked rockets keep this lifecycle independent of random supply contents.
+    // Explicit combat equipment keeps this lifecycle independent of random supply contents.
+    player.inventory.rocket++;
+    game.command(player.id, { type: "selectWeapon", weapon: "rocket" });
     assert.equal(game.command(player.id, { type: "fire" }), true);
     attacks++;
     advance(game, RETREAT_SECONDS + 3);
@@ -460,7 +468,7 @@ test("a complete match progresses through reachable crates, attacks, turns, and 
 
 
 test("the expanded arena provides elevated routes and supported spawns", () => {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   assert.ok(game.state.width >= 4000 && game.state.height >= 1700);
   assert.ok(game.state.platforms.length >= 25);
   for (const spawn of SPAWNS)
@@ -470,7 +478,7 @@ test("the expanded arena provides elevated routes and supported spawns", () => {
 });
 
 function contactArena() {
-  const game = new GameEngine({ mode: "practice" });
+  const game = singleFrogGame({ mode: "practice" });
   game.state.platforms = [{ id: "floor", x: 0, y: 1000, w: WIDTH, h: 800 }];
   game.state.crates = [];
   const [a, b] = game.state.players;

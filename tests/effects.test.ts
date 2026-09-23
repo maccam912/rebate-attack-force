@@ -1,3 +1,4 @@
+import { singleFrogGame } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { GameEngine, FIXED_STEP, PLAYER_RADIUS, WIDTH } from "../shared/game.js";
@@ -9,7 +10,7 @@ const input = (patch: Partial<PlayerInput> = {}): PlayerInput => ({
   left: false, right: false, up: false, down: false, aimX: 1500, aimY: 700, ...patch,
 });
 function arena() {
-  const game = new GameEngine({ mode: "practice", seed: 456, mineCount: 0 });
+  const game = singleFrogGame({ mode: "practice", seed: 456, mineCount: 0 });
   game.state.platforms = [{ id: "floor", x: 0, y: 1000, w: WIDTH, h: 800 }];
   game.state.crates = [];
   const [a, b] = game.state.players;

@@ -1,3 +1,4 @@
+import { singleFrogGame } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FIXED_STEP, GameEngine, PLAYER_RADIUS, WIDTH } from "../shared/game.js";
@@ -8,7 +9,7 @@ const input = (patch: Partial<PlayerInput> = {}): PlayerInput => ({
   left: false, right: false, up: false, down: false, aimX: 700, aimY: 600, ...patch,
 });
 function arena() {
-  const game = new GameEngine();
+  const game = singleFrogGame();
   game.state.platforms = [{ id: "floor", x: 0, y: 1500, w: WIDTH, h: 300 }];
   game.state.crates = [];
   const [frog, other] = game.state.players;
@@ -159,7 +160,7 @@ test("settling waits for airborne frogs even at their apex and beyond 2.5 second
 });
 
 test("a full roster stacked in reverse order transmits support and cannot deadlock settling", () => {
-  const game = new GameEngine({ players: ["a", "b", "c", "d"].map((id) => ({ id, name: id, frogs: 6 })) });
+  const game = singleFrogGame({ players: ["a", "b", "c", "d"].map((id) => ({ id, name: id, frogs: 6 })) });
   game.state.platforms = [{ id: "floor", x: 0, y: 1500, w: WIDTH, h: 300 }];
   game.state.crates = [];
   game.state.players.forEach((frog, index, players) => Object.assign(frog, {

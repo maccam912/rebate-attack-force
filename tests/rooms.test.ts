@@ -8,7 +8,9 @@ import { serverMaxTeams } from "../server/capacity";
 import type { GameEngine } from "../shared/game";
 import type { ServerState } from "../shared/protocol";
 import { DEFAULT_MINE_COUNT, MAX_MINES } from "../shared/settings";
+import { DEFAULT_MAP_ID, MAPS, getMap } from "../shared/maps";
 import type { LobbyState } from "../src/network";
+import { stockWeapons } from "./fixtures";
 
 const server = createGameServer();
 class LimitedAttackRoom extends AttackRoom {
@@ -64,8 +66,8 @@ function observe(room: Room): Observed {
   return observed;
 }
 
-async function create(name: string) {
-  return observe(await new Client(endpoint).create("attack", { name }));
+async function create(name: string, mapId?: string) {
+  return observe(await new Client(endpoint).create("attack", { name, mapId }));
 }
 async function join(id: string, name: string) {
   return observe(await new Client(endpoint).joinById(id, { name }));
@@ -101,6 +103,8 @@ test(
     await waitFor(() => b.notices.length === 1, "non-host start rejection");
     assert.match(b.notices[0], /Only the room host/);
     assert.equal(b.state, undefined);
+    for (const client of [a, b, c]) a.room.send("teamSettings", { teamId: client.room.sessionId, frogs: 1, hp: 100 });
+    await waitFor(() => a.lobby!.players.every((team) => team.frogs === 1), "single-frog lifecycle fixture");
     a.room.send("start");
     await waitFor(
       () => Boolean(a.state && b.state && c.state),
@@ -173,7 +177,9 @@ test(
       () => !a.state!.crates.some((crate) => crate.id === nearbyCrateId),
       "server collects the nearby supply crate",
     );
-    const carriedRockets = a.state!.players[0].inventory.rocket;
+    const carriedWeapon = a.state!.players[0].weapon!;
+    const carriedAmmo = a.state!.teams[0].inventory[carriedWeapon];
+    assert.ok(carriedAmmo > 0);
     a.room.send("input", {
       left: false,
       right: false,
@@ -215,8 +221,8 @@ test(
       "return to the crate collector",
     );
     assert.equal(
-      a.state!.players[0].inventory.rocket,
-      carriedRockets,
+      a.state!.teams[0].inventory[carriedWeapon],
+      carriedAmmo,
       "unused ammunition carries into the next turn",
     );
     a.room.send("input", {
@@ -227,13 +233,13 @@ test(
       aimX: 1280,
       aimY: 620,
     });
-    a.room.send("command", { type: "selectWeapon", weapon: "rocket" });
+    a.room.send("command", { type: "selectWeapon", weapon: carriedWeapon });
     a.room.send("command", { type: "fire", power: 1 });
     await waitFor(
-      () => a.state!.phase === "retreat",
+      () => a.state!.soundEvents!.some((event) => event.kind === "shot" && event.playerId === a.room.sessionId),
       "carried ammunition can fire without a new crate",
     );
-    assert.equal(a.state!.players[0].inventory.rocket, carriedRockets - 1);
+    assert.equal(a.state!.teams[0].inventory[carriedWeapon], carriedAmmo - 1);
 
     c.room.send("restart");
     await waitFor(() => c.notices.length === 1, "non-host restart rejection");
@@ -319,7 +325,7 @@ test("host configures teams; rejoining from a fresh client restores the same tea
   await waitFor(() => a.lobby?.players.length === 2, "two team lobby");
   b.room.send("teamSettings", { teamId: a.room.sessionId, frogs: 6, hp: 500 });
   await waitFor(() => b.notices.length === 1, "guest cannot configure teams");
-  assert.equal(a.lobby!.players[0].frogs, 1);
+  assert.equal(a.lobby!.players[0].frogs, 3);
   for (const settings of [{ frogs: -1, hp: 100 }, { frogs: 7, hp: 100 },
     { frogs: 2, hp: Infinity }, { frogs: 2, hp: 0 }, { frogs: 2.5, hp: 100 }]) {
     a.room.send("teamSettings", { teamId: a.room.sessionId, ...settings });
@@ -384,6 +390,75 @@ test("host configures teams; rejoining from a fresh client restores the same tea
   assert.equal(visitorBack.state!.winnerId, visitorId);
   assert.equal(visitorBack.state!.players.filter((p) => p.teamId === hostId && p.alive).length, 0);
   await visitorBack.room.leave();
+});
+
+test("room creation validates map choices and defaults to the original map", { timeout: 10000 }, async () => {
+  const original = await create("Captain");
+  await waitFor(() => !!original.lobby, "default map lobby");
+  assert.equal(original.lobby!.mapId, DEFAULT_MAP_ID);
+  await original.room.leave();
+
+  for (const mapId of ["unknown-map", "", "toString", "__proto__", 12, null, {}, []]) {
+    await assert.rejects(() => new Client(endpoint).create("attack", { name: "Invalid", mapId }), /valid map/);
+  }
+});
+
+test("only the host selects maps; all clients retain the choice through joining, reconnecting and restarting", { timeout: 10000 }, async () => {
+  const choices = MAPS.filter((map) => map.id !== DEFAULT_MAP_ID);
+  assert.ok(choices.length >= 2, "at least two additional authored maps are available");
+  const host = await create("Captain", choices[0].id);
+  await waitFor(() => !!host.lobby, "selected map lobby");
+  assert.equal(host.lobby!.mapId, choices[0].id);
+  const guest = await join(host.room.roomId, "Friend");
+  await waitFor(() => host.lobby?.players.length === 2 && !!guest.lobby, "map settings lobby");
+  assert.equal(guest.lobby!.mapId, choices[0].id, "late join sees the host's map");
+
+  guest.room.send("mapSettings", { mapId: choices[1].id });
+  await waitFor(() => guest.notices.length === 1, "guest map change rejected");
+  assert.match(guest.notices[0], /Only the room host/);
+  assert.equal(host.lobby!.mapId, choices[0].id);
+
+  const invalidSettings = [null, [], {}, { mapId: "unknown-map" }, { mapId: "toString" },
+    { mapId: "__proto__" }, { mapId: "" }, { mapId: 1 }, { mapId: null }, { mapId: [] }];
+  for (const message of invalidSettings) host.room.send("mapSettings", message);
+  await waitFor(() => host.notices.length === invalidSettings.length, "malformed map choices rejected");
+  assert.ok(host.notices.every((notice) => /valid map/.test(notice)));
+  assert.equal(host.lobby!.mapId, choices[0].id);
+
+  const selected = choices[1];
+  host.room.send("mapSettings", { mapId: selected.id });
+  await waitFor(() => host.lobby?.mapId === selected.id && guest.lobby?.mapId === selected.id,
+    "selected map broadcasts to everyone");
+  const token = host.room.reconnectionToken;
+  host.room.reconnection.enabled = false;
+  host.room.connection.close();
+  await waitFor(() => guest.lobby?.hostId === guest.room.sessionId, "map settings host migration");
+  assert.equal(guest.lobby!.mapId, selected.id);
+  const restored = observe(await new Client(endpoint).reconnect(token));
+  await waitFor(() => restored.lobby?.mapId === selected.id, "reconnection restores selected map");
+  restored.room.send("mapSettings", { mapId: DEFAULT_MAP_ID });
+  await waitFor(() => restored.notices.length === 1, "former host map change rejected");
+  assert.match(restored.notices[0], /Only the room host/);
+
+  guest.room.send("start");
+  await waitFor(() => !!guest.state && !!restored.state, "match starts on selected map");
+  for (const client of [guest, restored]) {
+    assert.equal(client.state!.mapId, selected.id);
+    assert.equal(client.state!.width, getMap(selected.id).width);
+    assert.equal(client.state!.height, getMap(selected.id).height);
+  }
+  guest.room.send("mapSettings", { mapId: DEFAULT_MAP_ID });
+  await waitFor(() => guest.notices.length === 2, "map freezes after start");
+  assert.match(guest.notices[1], /fixed once the match starts/);
+  assert.equal(guest.lobby!.mapId, selected.id);
+  const epoch = guest.state!.net!.epoch;
+  guest.room.send("restart");
+  await waitFor(() => guest.state!.net!.epoch !== epoch && restored.state!.net!.epoch !== epoch,
+    "restarted match retains selected map");
+  assert.equal(guest.state!.mapId, selected.id);
+  assert.equal(restored.state!.mapId, selected.id);
+  assert.equal(guest.lobby!.mapId, selected.id);
+  await Promise.all([guest.room.leave(), restored.room.leave()]);
 });
 
 test("host configures starting mines; settings survive host migration, reconnect and restart", { timeout: 10000 }, async () => {
@@ -480,7 +555,7 @@ test("sequenced prediction frames acknowledge once and reject stale, forged and 
 
   a.room.send("input", { ...frame, seq: 2, commands: [{ type: "selectWeapon", weapon: "golf" }, { type: "jump" }] });
   await waitFor(() => a.state!.net!.ack === 2, "new arsenal command and jump accepted");
-  assert.equal(a.state!.players[0].weapon, "golf");
+  assert.equal(a.state!.players[0].weapon, null, "a valid frame cannot select equipment the team has not collected");
   assert.ok(a.state!.players[0].vy < 0);
   const elapsedBefore = a.state!.net!.simulation.elapsed;
   for (let seq = 3; seq <= 32; seq++) a.room.send("input", {
@@ -523,7 +598,7 @@ test("only the host manages bots; bots share team settings and survive restart",
   const firstBot = host.lobby!.players.find((team) => team.bot)!;
   assert.equal(firstBot.name, "Bot 1");
   assert.equal(firstBot.connected, true);
-  assert.equal(firstBot.frogs, 1);
+  assert.equal(firstBot.frogs, 3);
   assert.notEqual(firstBot.id, guest.room.sessionId);
   assert.match(firstBot.color, /^#[0-9a-f]{6}$/i);
   guest.room.send("removeBot", { teamId: firstBot.id });
@@ -630,6 +705,9 @@ test("solo human can play bots; offline matches pause and abandoned bot rooms ex
   const elapsed = internals.game.capture().simulation.elapsed;
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(internals.game.capture().simulation.elapsed, elapsed, "no simulation progress while every human is offline");
+  // Reconnection timing and combat are the subjects here; random loot can
+  // legitimately give this distant bot a melee weapon and no useful shot.
+  stockWeapons(internals.game);
   const restored = observe(await new Client(endpoint).reconnect(token));
   await waitFor(() => restored.lobby?.hostId === restored.room.sessionId, "human resumes hosting");
   const initialTurn = internals.game.state.turn;
@@ -646,6 +724,7 @@ test("solo human can play bots; offline matches pause and abandoned bot rooms ex
   restored.room.send("restart");
   await waitFor(() => restored.state!.net!.epoch !== epoch, "solo bot match restarts");
   assert.equal(botShot(), undefined, "restart clears the prior match's shot journal");
+  stockWeapons(internals.game);
   restored.room.send("command", { type: "endTurn" });
   await waitFor(() => restored.state!.activeTeamId === botId, "bot plays after restart");
   await waitFor(() => !!botShot(), "restarted bot controller fires a weapon", 14000);

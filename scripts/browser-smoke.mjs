@@ -160,10 +160,21 @@ try {
   assert.deepEqual((await snapshot(local)).players[0], pausedPlayer, "Local menu pauses the simulation");
   await local.keyboard.press("Escape");
   assert.equal(await local.locator("#menu-overlay").isVisible(), false);
-  // Local turns actually swap active players.
+  // Versus defaults and empty team inventory are visible in the actual interface.
   await leaveMatch(local);
   await local.click('[data-mode="local"]');
+  assert.equal(await local.locator('[data-team="p1"] [data-setting="frogs"]').inputValue(), "3");
+  assert.equal(await local.locator('[data-team="p2"] [data-setting="frogs"]').inputValue(), "3");
+  assert.equal(await local.locator('[data-team="p1"] [data-setting="hp"]').inputValue(), "100");
   await local.click("#start-button");
+  s = await snapshot(local);
+  assert.equal(s.players.length, 6);
+  assert.ok(s.players.every((frog) => frog.hp === 100));
+  assert.ok(s.teams.every((team) => Object.values(team.inventory).every((ammo) => ammo === 0)));
+  await local.click("#arsenal-button");
+  assert.equal(await local.locator("#inventory [data-weapon]").count(), 0);
+  assert.match(await local.locator(".arsenal-empty").innerText(), /team.*empty/i);
+  await local.click("#close-arsenal");
   await wait(local, () => !!JSON.parse(window.render_game_to_text()).camera);
   const cameraBeforeTurn = (await snapshot(local)).camera.x;
   await local.click("#end-turn");
@@ -175,7 +186,7 @@ try {
   await local.click("#end-turn");
   await wait(
     local,
-    () => JSON.parse(window.render_game_to_text()).activePlayerId === "p1",
+    () => JSON.parse(window.render_game_to_text()).activePlayerId === "p1:frog-2",
   );
   await local.locator("#game").focus();
   await local.keyboard.down("d");
@@ -186,28 +197,35 @@ try {
     () =>
       JSON.parse(window.render_game_to_text()).players[0].hasCrate,
   );
-  const savedWeapon = (await snapshot(local)).players[0].weapon;
+  const savedWeapon = (await snapshot(local)).players.find((frog) => frog.id === "p1:frog-2").weapon;
   const saved = (await snapshot(local)).players[0].inventory[savedWeapon];
   await local.click("#end-turn");
   await wait(
     local,
-    () => JSON.parse(window.render_game_to_text()).activePlayerId === "p2",
+    () => JSON.parse(window.render_game_to_text()).activePlayerId === "p2:frog-2",
   );
   await local.click("#end-turn");
   await wait(
     local,
-    () => JSON.parse(window.render_game_to_text()).activePlayerId === "p1",
+    () => JSON.parse(window.render_game_to_text()).activePlayerId === "p1:frog-3",
   );
   assert.equal(
     (await snapshot(local)).players[0].inventory[savedWeapon],
     saved,
     "Unused ammo must survive hot-seat turns",
   );
+  const teamState = await snapshot(local);
+  assert.ok(teamState.players.filter((frog) => frog.teamId === "p1").every((frog) =>
+    frog.inventory[savedWeapon] === saved), "Every teammate shares the collected ammo");
+  assert.equal(teamState.teams[0].inventory[savedWeapon], saved);
   await local.click("#arsenal-button");
+  assert.equal(await local.locator("#inventory [data-weapon]").count(),
+    Object.values(teamState.teams[0].inventory).filter((ammo) => ammo > 0).length,
+    "Only collected weapons are offered");
   await local.click(`[data-weapon="${savedWeapon}"]`);
   assert.equal((await snapshot(local)).tool, "weapon");
   console.log(
-    "PASS: saved ammunition carries across turns and can be selected from stash",
+    "PASS: random pickup ammunition is shared across three teammates and selected from team inventory",
   );
   console.log(
     "PASS: local walk, crate pickup, charged shot, retreat, grappling/reeling/release, guide, hot-seat turns",
@@ -286,9 +304,15 @@ try {
   await host.locator("#game").focus();
   const before = await snapshot(host);
   await host.keyboard.down("d");
-  await host.waitForTimeout(550);
+  await host.waitForFunction((startX) => {
+    const state = JSON.parse(window.render_game_to_text());
+    return state.players[0].x > startX + 80 && state.players[0].hasCrate;
+  }, before.players[0].x, { timeout: 5000 });
   await host.keyboard.up("d");
-  await guest.waitForTimeout(100);
+  await guest.waitForFunction((startX) => {
+    const state = JSON.parse(window.render_game_to_text());
+    return state.players[0].x > startX + 60 && state.players[0].hasCrate;
+  }, before.players[0].x, { timeout: 5000 });
   const after = await snapshot(guest);
   assert.ok(
     after.players[0].x > before.players[0].x + 60,

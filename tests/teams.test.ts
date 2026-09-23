@@ -1,7 +1,16 @@
+import { singleFrogGame } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DOUBLE_JUMP_SECONDS, FIXED_STEP, GameEngine, PLAYER_RADIUS, WATER_Y, WIDTH } from "../shared/game";
-import { MAX_FROGS, MAX_HP, teamColor, validTeamSettings } from "../shared/settings";
+import { DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, teamColor, teamSettings, validTeamSettings } from "../shared/settings";
+import { createInventory, WEAPON_CATALOG } from "../shared/weapons";
+
+function collect(game: GameEngine, id = "mystery") {
+  const frog = game.state.players.find((player) => player.id === game.state.activePlayerId)!;
+  game.state.crates = [{ id, x: frog.x, y: frog.y }];
+  game.step(FIXED_STEP);
+  return game.state.soundEvents!.filter((event) => event.kind === "pickup").at(-1)!.weapon!;
+}
 
 const advance = (game: GameEngine, seconds: number) => {
   for (let i = 0; i < Math.ceil(seconds / FIXED_STEP); i++) game.step(FIXED_STEP);
@@ -18,7 +27,123 @@ function teams() {
   ] });
 }
 
-test("team settings create distinct supported frogs with independent HP and inventory", () => {
+test("lobby, direct engine, partial settings and invalid settings default to three 100-HP frogs", () => {
+  assert.deepEqual(DEFAULT_TEAM_SETTINGS, { frogs: 3, hp: 100 });
+  assert.deepEqual(teamSettings({}), DEFAULT_TEAM_SETTINGS);
+  assert.deepEqual(teamSettings({ hp: 175 }), { frogs: 3, hp: 175 });
+  assert.deepEqual(teamSettings({ frogs: NaN }), DEFAULT_TEAM_SETTINGS);
+  for (const options of [{}, { players: [{ id: "a", name: "A" }, { id: "b", name: "B" }] },
+    { players: [{ id: "a", name: "A", frogs: 0, hp: -1 }, { id: "b", name: "B" }] }]) {
+    const game = new GameEngine(options);
+    assert.equal(game.state.players.length, 6);
+    for (const team of game.state.teams) {
+      assert.equal(team.frogs, 3);
+      assert.equal(team.hp, 100);
+      assert.deepEqual(team.inventory, createInventory());
+      for (const player of game.state.players.filter((frog) => frog.teamId === team.id)) {
+        assert.equal(player.hp, 100);
+        assert.equal(player.maxHp, 100);
+        assert.equal(player.inventory, team.inventory);
+        assert.equal(player.weapon, null);
+      }
+    }
+  }
+});
+
+test("pickups add to the whole team, keep usable selections, and can be spent by the next frog", () => {
+  const game = new GameEngine({ seed: 260, players: [
+    { id: "a", name: "A", frogs: 2 }, { id: "b", name: "B", frogs: 1 },
+  ] });
+  const [first, teammate, opponent] = game.state.players;
+  const firstReward = collect(game);
+  assert.equal(firstReward, "sniper");
+  assert.equal(first.inventory, teammate.inventory);
+  assert.equal(first.inventory, game.state.teams[0].inventory);
+  assert.notEqual(first.inventory, opponent.inventory);
+  assert.equal(teammate.inventory[firstReward], WEAPON_CATALOG[firstReward].ammo);
+  assert.equal(teammate.hasCrate, true);
+  assert.equal(game.command(teammate.id, { type: "selectWeapon", weapon: firstReward }), false);
+  assert.equal(game.command(first.id, { type: "selectWeapon", weapon: "rocket" }), false);
+  const secondReward = collect(game, "another-mystery");
+  assert.notEqual(firstReward, secondReward);
+  assert.equal(first.weapon, firstReward, "a pickup must not replace a usable selection");
+  assert.equal(teammate.weapon, firstReward);
+  end(game); // A1 -> B
+  end(game); // B -> A2
+  assert.equal(game.state.activePlayerId, teammate.id);
+  assert.equal(game.command(teammate.id, { type: "selectWeapon", weapon: secondReward }), true);
+  assert.equal(game.command(teammate.id, { type: "selectWeapon", weapon: firstReward }), true);
+  game.setInput(teammate.id, { left: false, right: false, up: false, down: false, aimX: -1000, aimY: -1000 });
+  assert.equal(game.command(teammate.id, { type: "fire" }), true);
+  assert.equal(game.state.teams[0].inventory[firstReward], 0);
+  assert.equal(first.inventory[firstReward], 0, "one shot consumes one shared round");
+  assert.equal(first.weapon, secondReward, "another frog cannot retain an exhausted selection");
+  assert.equal(teammate.weapon, secondReward);
+  assert.equal(game.command(teammate.id, { type: "fire" }), false);
+  assert.deepEqual(opponent.inventory, createInventory());
+});
+
+test("the team retains collected equipment after the collecting frog dies", () => {
+  const game = new GameEngine({ seed: 260, players: [
+    { id: "a", name: "A", frogs: 2 }, { id: "b", name: "B", frogs: 1 },
+  ] });
+  const [collector, survivor] = game.state.players;
+  const reward = collect(game);
+  Object.assign(collector, { x: 10, y: WATER_Y, vy: 400, grounded: false });
+  advance(game, 3);
+  assert.equal(collector.alive, false);
+  assert.equal(collector.weapon, null);
+  assert.equal(survivor.inventory[reward], WEAPON_CATALOG[reward].ammo);
+  assert.equal(game.state.activeTeamId, "b");
+  end(game);
+  assert.equal(game.state.activePlayerId, survivor.id);
+  assert.equal(game.command(survivor.id, { type: "selectWeapon", weapon: reward }), true);
+  assert.equal(game.command(survivor.id, { type: "fire" }), true);
+  assert.equal(survivor.inventory[reward], 0);
+  assert.equal(collector.weapon, null, "refreshing the stash must not rearm a dead frog");
+});
+
+test("JSON checkpoints restore one canonical stash and replay random pickups and spending exactly", () => {
+  const original = new GameEngine({ seed: 260 });
+  collect(original);
+  const snapshot = JSON.parse(JSON.stringify(original.capture()));
+  const restored = new GameEngine();
+  restored.restore(snapshot);
+  for (const team of restored.state.teams)
+    for (const player of restored.state.players.filter((frog) => frog.teamId === team.id))
+      assert.equal(player.inventory, team.inventory, "JSON copies rebind before prediction replay");
+  const run = (game: GameEngine) => {
+    collect(game, "next-mystery");
+    end(game);
+    end(game);
+    const frog = game.state.players.find((player) => player.id === game.state.activePlayerId)!;
+    assert.equal(game.command(frog.id, { type: "selectWeapon", weapon: "sniper" }), true);
+    assert.equal(game.command(frog.id, { type: "fire" }), true);
+    game.step(FIXED_STEP);
+    return game.capture();
+  };
+  assert.deepEqual(run(restored), run(original));
+  assert.equal(snapshot.state.teams[0].inventory.sniper, 1, "restoring never mutates the supplied checkpoint");
+});
+
+test("practice keeps its full arsenal shared and refills the same team stash on each turn", () => {
+  const game = new GameEngine({ mode: "practice" });
+  const [first, teammate] = game.state.players;
+  const stash = game.state.teams[0].inventory;
+  assert.equal(first.inventory, stash);
+  assert.equal(teammate.inventory, stash);
+  assert.equal(game.command(first.id, { type: "selectWeapon", weapon: "golf" }), true);
+  game.setInput(first.id, { left: false, right: false, up: false, down: false, aimX: -1000, aimY: first.y });
+  assert.equal(game.command(first.id, { type: "fire" }), true);
+  assert.equal(teammate.inventory.golf, 8);
+  advance(game, 1);
+  assert.equal(game.state.turn, 2);
+  assert.equal(game.state.teams[0].inventory, stash);
+  assert.equal(first.inventory, teammate.inventory);
+  assert.deepEqual(stash, createInventory("practice"));
+});
+
+test("team settings create distinct supported frogs with independent HP and shared team inventory", () => {
   const game = new GameEngine({ players: [0, 1, 2, 3].map((i) => ({
     id: `t${i}`, name: `Team ${i}`, frogs: MAX_FROGS, hp: MAX_HP,
   })) });
@@ -33,9 +158,10 @@ test("team settings create distinct supported frogs with independent HP and inve
   }
   advance(game, 1);
   assert.ok(game.state.players.every((p) => p.alive && p.grounded));
-  const otherAmmo = game.state.players[1].inventory.rocket;
   game.state.players[0].inventory.rocket = 17;
-  assert.equal(game.state.players[1].inventory.rocket, otherAmmo);
+  assert.equal(game.state.players[1].inventory.rocket, 17);
+  assert.equal(game.state.teams[0].inventory.rocket, 17);
+  assert.equal(game.state.teams[1].inventory.rocket, 0);
   for (const value of [null, {}, { frogs: 0, hp: 100 }, { frogs: 7, hp: 100 },
     { frogs: 2.5, hp: 100 }, { frogs: 2, hp: NaN }, { frogs: 2, hp: 501 }, { frogs: 2, hp: "100" }])
     assert.equal(validTeamSettings(value), false);
@@ -73,7 +199,7 @@ test("large rosters retain every team, with separate safe spawns and colors beyo
 });
 
 test("expanded arenas allow movement, aiming, weapons, and checkpoint replay beyond the original boundary", () => {
-  const game = new GameEngine({ players: Array.from({ length: 30 }, (_, i) => ({
+  const game = singleFrogGame({ players: Array.from({ length: 30 }, (_, i) => ({
     id: `t${i}`, name: `Team ${i}`, connected: i === 29,
   })) });
   const frog = game.state.players[29];
@@ -85,6 +211,7 @@ test("expanded arenas allow movement, aiming, weapons, and checkpoint replay bey
   advance(game, .2);
   assert.ok(frog.x > x + 10, "world movement uses the expanded width");
   game.setInput(frog.id, { left: false, right: false, up: false, down: false, aimX: x + 180, aimY: frog.y });
+  frog.inventory.anvil = 1;
   game.command(frog.id, { type: "selectWeapon", weapon: "anvil" });
   game.command(frog.id, { type: "fire", power: 1 });
   assert.ok(game.state.projectiles.length > 0);
@@ -184,7 +311,7 @@ test("all disconnected teams wait without cycling turns or declaring a winner", 
 });
 
 function jumpingGame() {
-  const game = new GameEngine({ mode: "practice" });
+  const game = singleFrogGame({ mode: "practice" });
   game.state.platforms = [{ id: "floor", x: 0, y: 1600, w: 4320, h: 200 }];
   return game;
 }

@@ -13,7 +13,8 @@ import type {
 } from "./types.js";
 
 import { ropeFixedLength, ropePathLength, updateRopePath } from "./rope.js";
-import { DEFAULT_MINE_COUNT, teamColor, teamSettings, validMineCount } from "./settings.js";
+import { DEFAULT_MAP_ID, getMap, type ArenaMap } from "./maps.js";
+import { DEFAULT_MINE_COUNT, DEFAULT_TEAM_SETTINGS, teamColor, teamSettings, validMineCount } from "./settings.js";
 import { createInventory, WEAPON_CATALOG, WEAPON_IDS, type WeaponDefinition } from "./weapons.js";
 import type { GameSnapshot } from "./protocol.js";
 import { applyImpulse, GRAVITY, WALK_SPEED, HARD_IMPACT_SPEED, limitBodySpeed, surfaceImpact, updateBodyAttitude } from "./physics.js";
@@ -62,16 +63,16 @@ export const SPAWNS = [
   { x: 2990, y: 1460 - PLAYER_RADIUS },
 ];
 
-function frogSpawn(teamIndex: number, frogIndex: number): Point {
-  const slot = teamIndex % SPAWN_PLATFORMS.length;
-  const offset = Math.floor(teamIndex / SPAWN_PLATFORMS.length) * WIDTH;
-  if (slot < SPAWNS.length) {
+function frogSpawn(map: ArenaMap, teamIndex: number, frogIndex: number): Point {
+  const slot = teamIndex % map.spawnPlatformIds.length;
+  const offset = Math.floor(teamIndex / map.spawnPlatformIds.length) * map.width;
+  if (map.id === DEFAULT_MAP_ID && slot < SPAWNS.length) {
     const spawn = SPAWNS[slot]!;
     const direction = slot === 1 || slot === 3 ? -1 : 1;
     // Preserve the original starting positions and room for six frogs per team.
     return { x: offset + spawn.x + direction * frogIndex * (slot === 3 ? 42 : 64), y: spawn.y };
   }
-  const platform = SPAWN_PLATFORMS[slot]!;
+  const platform = map.platforms.find((candidate) => candidate.id === map.spawnPlatformIds[slot])!;
   const spacing = Math.min(42, (platform.w - PLAYER_RADIUS * 2 - 8) / 5);
   return {
     x: offset + platform.x + platform.w / 2 + (frogIndex - 2.5) * spacing,
@@ -79,58 +80,25 @@ function frogSpawn(teamIndex: number, frogIndex: number): Point {
   };
 }
 
+/** Default geometry remains public for existing callers and old saved games. */
 export function makePlatforms(): Platform[] {
-  return [
-    { id: "west-island", x: 60, y: 1600, w: 720, h: 200 },
-    { id: "east-island", x: 3540, y: 1600, w: 720, h: 200 },
-    { id: "foundry", x: 1060, y: 1480, w: 680, h: 320 },
-    { id: "stepping-stone", x: 2050, y: 1600, w: 480, h: 200 },
-    { id: "quarry", x: 2750, y: 1460, w: 480, h: 340 },
-    { id: "west-shelf", x: 300, y: 1400, w: 280, h: 34 },
-    { id: "west-bar", x: 100, y: 1130, w: 300, h: 28 },
-    { id: "west-bridge", x: 650, y: 1170, w: 260, h: 34 },
-    { id: "west-canopy", x: 480, y: 900, w: 280, h: 34 },
-    { id: "west-tower", x: 60, y: 660, w: 320, h: 28 },
-    { id: "west-summit", x: 540, y: 390, w: 320, h: 34 },
-    { id: "foundry-shelf", x: 1130, y: 1210, w: 280, h: 36 },
-    { id: "foundry-bar", x: 990, y: 930, w: 240, h: 34 },
-    { id: "lookout", x: 1440, y: 720, w: 260, h: 32 },
-    { id: "high-bridge", x: 1060, y: 450, w: 280, h: 32 },
-    { id: "summit", x: 1550, y: 210, w: 380, h: 36 },
-    { id: "central-shelf", x: 1740, y: 1080, w: 260, h: 38 },
-    { id: "central-step", x: 2170, y: 1330, w: 300, h: 34 },
-    { id: "central-canopy", x: 2140, y: 800, w: 280, h: 36 },
-    { id: "central-tower", x: 1970, y: 480, w: 300, h: 34 },
-    { id: "east-summit", x: 2460, y: 280, w: 300, h: 32 },
-    { id: "quarry-bar", x: 2700, y: 650, w: 300, h: 34 },
-    { id: "quarry-step", x: 2590, y: 1080, w: 260, h: 34 },
-    { id: "quarry-shelf", x: 3040, y: 1220, w: 280, h: 34 },
-    { id: "east-bridge", x: 3240, y: 930, w: 300, h: 34 },
-    { id: "east-tower", x: 3190, y: 440, w: 280, h: 34 },
-    { id: "east-canopy", x: 3760, y: 680, w: 300, h: 34 },
-    { id: "east-bar", x: 3830, y: 1130, w: 300, h: 28 },
-    { id: "east-shelf", x: 3690, y: 1400, w: 280, h: 34 },
-  ];
+  return getMap().platforms.map((platform) => ({ ...platform }));
 }
 
-const BASE_PLATFORMS = makePlatforms();
-const ORIGINAL_SPAWN_IDS = ["west-island", "east-island", "foundry", "quarry"];
-const SPAWN_PLATFORMS = [
-  ...ORIGINAL_SPAWN_IDS.map((id) => BASE_PLATFORMS.find((platform) => platform.id === id)!),
-  ...BASE_PLATFORMS.filter((platform) => !ORIGINAL_SPAWN_IDS.includes(platform.id)),
-];
-
-/** Use spare ledges first; expand the scrapyard instead of overlapping extra teams. */
-function makeArena(teamCount: number): { width: number; platforms: Platform[] } {
-  const sections = Math.ceil(teamCount / SPAWN_PLATFORMS.length);
+/** Use authored ledges first, then repeat the layout without internal cave walls. */
+function makeArena(map: ArenaMap, teamCount: number): { width: number; platforms: Platform[] } {
+  const sections = Math.ceil(teamCount / map.spawnPlatformIds.length);
   return {
-    width: WIDTH * sections,
+    width: map.width * sections,
     platforms: Array.from({ length: sections }, (_, section) =>
-      BASE_PLATFORMS.map((platform) => ({
-        ...platform,
-        id: section === 0 ? platform.id : `${platform.id}:${section}`,
-        x: platform.x + section * WIDTH,
-      }))).flat(),
+      map.platforms.filter((platform) =>
+        (!platform.boundary || platform.boundary !== "left" || section === 0) &&
+        (!platform.boundary || platform.boundary !== "right" || section === sections - 1))
+        .map((platform) => ({
+          ...platform,
+          id: section === 0 ? platform.id : `${platform.id}:${section}`,
+          x: platform.x + section * map.width,
+        }))).flat(),
   };
 }
 
@@ -167,12 +135,15 @@ export class GameEngine {
       color: definition.color ?? teamColor(index),
       connected: definition.connected !== false,
       bot: definition.bot === true,
-      ...teamSettings({ frogs: definition.frogs ?? 1, hp: definition.hp ?? 100 }),
+      inventory: createInventory(options.mode),
+      ...teamSettings({ frogs: definition.frogs ?? DEFAULT_TEAM_SETTINGS.frogs,
+        hp: definition.hp ?? DEFAULT_TEAM_SETTINGS.hp }),
     }));
-    const arena = makeArena(teams.length);
+    const map = getMap(options.mapId);
+    const arena = makeArena(map, teams.length);
     const players: Player[] = teams.flatMap((team, index) =>
       Array.from({ length: team.frogs }, (_, frog): Player => {
-        const spawn = frogSpawn(index, frog);
+        const spawn = frogSpawn(map, index, frog);
         return {
           id: frog === 0 ? team.id : `${team.id}:frog-${frog + 1}`,
           teamId: team.id,
@@ -194,17 +165,19 @@ export class GameEngine {
           impact: 0,
           tumble: 0,
           statuses: [],
-          inventory: createInventory(options.mode),
-          weapon: "rocket",
-          hasCrate: true,
+          inventory: team.inventory,
+          weapon: options.mode === "practice" ? "rocket" : null,
+          hasCrate: options.mode === "practice",
         };
       }));
     const firstTeam = teams.find((team) => team.connected) ?? teams[0]!;
     const firstFrog = players.find((player) => player.teamId === firstTeam.id)!;
     this.state = {
+      mapId: map.id,
+      hasWater: map.hasWater,
       width: arena.width,
-      height: HEIGHT,
-      waterY: WATER_Y,
+      height: map.height,
+      waterY: map.waterY,
       platforms: arena.platforms,
       players,
       teams,
@@ -223,7 +196,8 @@ export class GameEngine {
       timeLeft: options.mode === "practice" ? 90 : TURN_SECONDS,
       mode: options.mode ?? "versus",
       winnerId: null,
-      message: "Choose from your arsenal. Make your shot. Get out of the way.",
+      message: options.mode === "practice" ? "Choose from your arsenal. Make your shot. Get out of the way."
+        : "Collect a mystery crate to add a random weapon to your team's inventory.",
     };
     players.forEach((player) => this.inputs.set(player.id, blankInput(player.lookAt)));
     if (firstTeam.connected) this.lastFrog.set(firstTeam.id, firstFrog.id);
@@ -252,6 +226,13 @@ export class GameEngine {
   restore(snapshot: GameSnapshot): void {
     const { state, simulation } = structuredClone(snapshot);
     this.state = state;
+    // JSON transport duplicates the compatibility aliases. The team stash is
+    // authoritative, so every frog must point back to it before replay begins.
+    for (const team of state.teams) {
+      team.inventory ??= this.state.players.find((player) => player.teamId === team.id)?.inventory ?? createInventory(state.mode);
+      for (const player of state.players)
+        if (player.teamId === team.id) player.inventory = team.inventory;
+    }
     this.inputs = new Map(simulation.inputs);
     this.accumulator = simulation.accumulator;
     this.serial = simulation.serial;
@@ -373,13 +354,12 @@ export class GameEngine {
       case "fire":
         if (
           this.state.phase !== "playing" ||
-          !player.hasCrate ||
           !player.weapon ||
           player.inventory[player.weapon] <= 0
         ) {
           if (this.state.phase === "playing")
             this.state.message =
-              "Your pack is empty. Collect a supply crate first.";
+              "Your team's inventory is empty. Collect a mystery crate first.";
           return false;
         }
         return this.fire(player, input, command.power);
@@ -394,6 +374,7 @@ export class GameEngine {
         if (player.weapon !== command.weapon)
           this.playerSound("select", player, { weapon: command.weapon });
         player.weapon = command.weapon;
+        player.hasCrate = true;
         return true;
       case "endTurn":
         this.beginSettling();
@@ -478,7 +459,7 @@ export class GameEngine {
         else player.rope = null;
       }
       this.cutWireRope(player);
-      if (player.y + PLAYER_RADIUS >= WATER_Y) this.drown(player);
+      if (this.state.hasWater !== false && player.y + PLAYER_RADIUS >= this.state.waterY) this.drown(player);
     }
     this.updateProjectiles(dt, realDt);
     this.updateMines(dt, realDt);
@@ -637,14 +618,14 @@ export class GameEngine {
   }
 
   private drown(player: Player): void {
-    this.sound("splash", { x: player.x, y: WATER_Y },
+    this.sound("splash", { x: player.x, y: this.state.waterY },
       { playerId: player.id, intensity: clamp(Math.hypot(player.vx, player.vy) / 1000, 0.5, 1) });
     this.recordDamage(player, Math.max(0, player.hp - (this.resolution().pendingDamage[player.id] ?? 0)));
     const resolution = this.resolution();
     this.affect(player);
     resolution.drownedPlayerIds.push(player.id);
-    resolution.focus = { x: player.x, y: WATER_Y - PLAYER_RADIUS };
-    player.y = WATER_Y - PLAYER_RADIUS;
+    resolution.focus = { x: player.x, y: this.state.waterY - PLAYER_RADIUS };
+    player.y = this.state.waterY - PLAYER_RADIUS;
     player.vx = player.vy = 0;
     player.rope = null;
     this.beginSettling();
@@ -1032,11 +1013,14 @@ export class GameEngine {
     this.state.crates = this.state.crates.filter(
       (crate) => !collected.includes(crate),
     );
-    for (const crate of collected) active.inventory[crate.weapon] += WEAPON_CATALOG[crate.weapon].ammo;
-    this.selectAvailableWeapon(active);
-    active.hasCrate = true;
-    this.playerSound("pickup", active, { weapon: collected[0]!.weapon });
-    this.state.message = `${active.name} added ${collected.length === 1 ? `${WEAPON_CATALOG[collected[0]!.weapon].name} resupply` : `${collected.length} rounds`} to their pack. Aim, fire, then retreat!`;
+    const rewards = collected.map(() => WEAPON_IDS[Math.floor(this.random() * WEAPON_IDS.length)]!);
+    for (const weapon of rewards) {
+      active.inventory[weapon] += WEAPON_CATALOG[weapon].ammo;
+      this.playerSound("pickup", active, { weapon });
+    }
+    this.refreshTeamWeapons(active.teamId);
+    const names = rewards.map((weapon) => WEAPON_CATALOG[weapon].name).join(", ");
+    this.state.message = `${active.name} found ${names} for their team. Choose from your team's inventory, then fire!`;
   }
 
   private aim(
@@ -1120,7 +1104,7 @@ export class GameEngine {
       if (weapon === "shotgun") applyImpulse(player, -direction.x * 190, -direction.y * 190 - 40, -player.facing * 3);
     }
     player.inventory[weapon]--;
-    this.selectAvailableWeapon(player);
+    this.refreshTeamWeapons(player.teamId);
     player.hasCrate = false;
     if (definition.attack === "melee" || definition.attack === "blast") {
       this.beginSettling();
@@ -1218,9 +1202,10 @@ export class GameEngine {
       }
       if (contactSpeed > 120) this.sound("bounce", projectile,
         { weapon: projectile.kind, intensity: clamp(contactSpeed / 1000, 0.15, 1) });
-      if (projectile.y >= WATER_Y) this.sound("splash", projectile,
+      const inWater = this.state.hasWater !== false && projectile.y >= this.state.waterY;
+      if (inWater) this.sound("splash", projectile,
         { weapon: projectile.kind, intensity: 0.4 });
-      if (projectile.y >= WATER_Y || projectile.x < -100 || projectile.x > this.state.width + 100 || projectile.y < -650) continue;
+      if (inWater || projectile.y > this.state.height + 200 || projectile.x < -100 || projectile.x > this.state.width + 100 || projectile.y < -650) continue;
       if (detonate || projectile.life <= 0) {
         this.explode(projectile.x, projectile.y, projectile.radius, projectile.damage,
           undefined, definition, undefined, isFragment ? 0.65 : 1);
@@ -1275,10 +1260,11 @@ export class GameEngine {
       }
       if (contactSpeed > 120) this.sound("bounce", mine,
         { weapon: mine.kind, intensity: clamp(contactSpeed / 1000, 0.15, 1) });
-      if (mine.y >= WATER_Y) {
+      if (this.state.hasWater !== false && mine.y >= this.state.waterY) {
         this.sound("splash", mine, { weapon: mine.kind, intensity: 0.4 });
         return false;
       }
+      if (mine.y > this.state.height + 200) return false;
       // Persistent traps never detonate merely because a waiting frog is nearby.
       // Their deployer also gets the entire deployment turn to retreat safely.
       if (mine.fuse === null && mine.placedTurn < this.state.turn && active && this.canMovePhase()) {
@@ -1381,7 +1367,7 @@ export class GameEngine {
       this.state.players.forEach((player) => {
         if (!player.alive) {
           const index = this.state.teams.findIndex((team) => team.id === player.teamId);
-          Object.assign(player, frogSpawn(index, player.number - 1));
+          Object.assign(player, frogSpawn(getMap(this.state.mapId), index, player.number - 1));
           player.rotation = 0;
           player.angularVelocity = 0;
           player.impact = 0;
@@ -1426,8 +1412,10 @@ export class GameEngine {
       }
     }
     this.jump = null;
+    if (this.state.mode === "practice") {
+      for (const team of this.state.teams) Object.assign(team.inventory, createInventory("practice"));
+    }
     this.state.players.forEach((player) => {
-      if (this.state.mode === "practice") player.inventory = createInventory("practice");
       this.selectAvailableWeapon(player);
       player.hasCrate = player.alive && player.weapon !== null;
       player.rope = null;
@@ -1447,15 +1435,44 @@ export class GameEngine {
       (player) => player.id === this.state.activePlayerId,
     )!;
     this.playerSound("switch", active);
-    this.state.message = `${active.name}'s turn. ${active.hasCrate ? "Use your saved ammo or collect more supplies." : "Find a supply crate."}`;
+    this.state.message = `${active.name}'s turn. ${active.hasCrate ? "Choose a weapon from your team's inventory or collect more supplies." : "Find a mystery crate for your team."}`;
     this.spawnCrates();
   }
 
   private selectAvailableWeapon(player: Player): void {
+    if (!player.alive) { player.weapon = null; return; }
     if (!player.weapon || player.inventory[player.weapon] <= 0) {
       player.weapon =
         WEAPON_IDS.find((weapon) => player.inventory[weapon] > 0) ?? null;
     }
+  }
+
+  private refreshTeamWeapons(teamId: string): void {
+    for (const player of this.state.players) {
+      if (player.teamId !== teamId) continue;
+      this.selectAvailableWeapon(player);
+      player.hasCrate = player.alive && player.weapon !== null;
+    }
+  }
+
+  /** Exclude roofs, walls, submerged ledges, and covered pieces of a platform top. */
+  private clearPlatformTop(platform: Platform, x: number, radius: number): boolean {
+    const y = platform.y - radius;
+    return !platform.boundary && y >= radius && x - radius >= platform.x &&
+      x + radius <= platform.x + platform.w &&
+      (this.state.hasWater === false || platform.y < this.state.waterY) &&
+      !this.state.platforms.some((other) => other !== platform &&
+        x + radius > other.x && x - radius < other.x + other.w &&
+        y + radius > other.y && y - radius < other.y + other.h);
+  }
+
+  private cratePoint(platform: Platform, preferredX = platform.x + platform.w / 2): Point | undefined {
+    if (platform.w < 56) return;
+    const x = clamp(preferredX, platform.x + 28, platform.x + platform.w - 28);
+    if (this.clearPlatformTop(platform, x, PLAYER_RADIUS)) return { x, y: platform.y - PLAYER_RADIUS };
+    for (let candidate = platform.x + 28; candidate <= platform.x + platform.w - 28; candidate += 48)
+      if (this.clearPlatformTop(platform, candidate, PLAYER_RADIUS))
+        return { x: candidate, y: platform.y - PLAYER_RADIUS };
   }
 
   private spawnCrates(): void {
@@ -1470,26 +1487,21 @@ export class GameEngine {
           player.x <= platform.x + platform.w + 12,
       )
       .sort((a, b) => a.y - b.y)[0];
-    const platform = support ?? this.state.platforms[0]!;
+    const platform = support ?? this.state.platforms.find((candidate) => this.cratePoint(candidate))!;
     const direction = player.x > platform.x + platform.w / 2 ? -1 : 1;
     const nearX = clamp(
       player.x + direction * 110,
       platform.x + 28,
       platform.x + platform.w - 28,
     );
+    const nearPoint = this.cratePoint(platform, nearX);
     this.state.crates = [
-      {
-        id: this.id("crate"),
-        x: nearX,
-        y: platform.y - PLAYER_RADIUS,
-        weapon: WEAPON_IDS[Math.floor(this.random() * WEAPON_IDS.length)]!,
-      },
-      ...this.state.platforms.filter((p) => p.h < 100).map((p) => ({
-        id: this.id("crate"),
-        x: p.x + p.w / 2,
-        y: p.y - PLAYER_RADIUS,
-        weapon: WEAPON_IDS[Math.floor(this.random() * WEAPON_IDS.length)]!,
-      })),
+      ...(nearPoint ? [{ id: this.id("crate"), ...nearPoint }] : []),
+      ...this.state.platforms.filter((p) => p.h < 100 ||
+        p.appearance === "canopy" || p.appearance === "tortoise" || p.appearance === "crocodile").flatMap((p) => {
+        const point = this.cratePoint(p);
+        return point ? [{ id: this.id("crate"), ...point }] : [];
+      }),
     ];
   }
 
@@ -1500,11 +1512,8 @@ export class GameEngine {
     for (const platform of this.state.platforms) {
       for (let x = platform.x + MINE_SPACING / 2; x <= platform.x + platform.w - MINE_SPACING / 2; x += MINE_SPACING) {
         const y = platform.y - MINE_RADIUS;
-        if (y + MINE_RADIUS >= this.state.waterY ||
-          this.state.players.some((player) => Math.hypot(player.x - x, player.y - y) < clearance) ||
-          this.state.platforms.some((other) => other !== platform &&
-            x + MINE_RADIUS > other.x && x - MINE_RADIUS < other.x + other.w &&
-            y + MINE_RADIUS > other.y && y - MINE_RADIUS < other.y + other.h)) continue;
+        if (!this.clearPlatformTop(platform, x, MINE_RADIUS) ||
+          this.state.players.some((player) => Math.hypot(player.x - x, player.y - y) < clearance)) continue;
         candidates.push({ x, y });
       }
     }
