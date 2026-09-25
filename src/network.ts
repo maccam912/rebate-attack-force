@@ -1,7 +1,18 @@
 import { Client, Room } from "@colyseus/sdk";
 import type { GameCommand, GameState, PlayerInput, Team, TeamSettings } from "../shared/types";
-import type { ServerState } from "../shared/protocol";
+import { stateWithoutNetwork, type ServerState } from "../shared/protocol";
 import { ClientPrediction } from "./prediction";
+import type { AvailableRoom } from "../shared/rooms";
+
+function roomClient() {
+  return new Client(import.meta.env.VITE_ROOM_SERVER ||
+    `${location.origin}${import.meta.env.DEV ? "/rooms" : ""}`);
+}
+
+export async function availableRooms(signal: AbortSignal): Promise<AvailableRoom[]> {
+  const response = await roomClient().http.get("/api/rooms", { signal, cache: "no-store" });
+  return response.data.rooms;
+}
 
 export type LobbyState = {
   roomId: string;
@@ -37,10 +48,7 @@ export class RoomConnection {
   });
 
   constructor(private readonly callbacks: Callbacks) {
-    const endpoint =
-      import.meta.env.VITE_ROOM_SERVER ||
-      `${location.origin}${import.meta.env.DEV ? "/rooms" : ""}`;
-    this.client = new Client(endpoint);
+    this.client = roomClient();
   }
 
   get sessionId() {
@@ -147,6 +155,11 @@ export class RoomConnection {
     room.onMessage<LobbyState>("lobby", this.callbacks.onLobby);
     room.onMessage<ServerState>("state", (state) => {
       if (this.room !== room) return;
+      try { state = { ...state, ...stateWithoutNetwork(state) }; }
+      catch (error) {
+        this.callbacks.onError(error instanceof Error ? error.message : "Unable to load the room's map.");
+        return;
+      }
       this.supportsPrediction = !!state.net;
       this.prediction.receive(state, room.sessionId);
       this.callbacks.onState(state);

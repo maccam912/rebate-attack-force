@@ -1,10 +1,12 @@
 import type { GameState, Player } from "../shared/types";
 import { WEAPON_CATALOG } from "../shared/weapons";
-import { DAMAGE_APPLY_SECONDS } from "../shared/game";
+import { DAMAGE_APPLY_SECONDS, EXPLOSION_SECONDS } from "../shared/game";
 
 import type { Camera } from "./camera";
 import { getMap } from "../shared/maps";
 import { drawTerrainBackground, drawTerrainPlatform, drawTerrainWater, drawTerrainScenery } from "./terrain-renderer";
+import { drawImageTerrain } from "./image-terrain-renderer";
+import { bodyTerrain } from "../shared/image-terrain";
 import { FrogAnimator } from "./frog";
 import { drawHazards, drawStatusAura, drawStatusBadges, drawVisionEffects, STATUS_PRESENTATION } from "./effect-renderer";
 
@@ -279,12 +281,14 @@ export function renderGame(
     );
   }
   const map = getMap(s.mapId);
-  drawTerrainScenery(c, s, s.platforms, o.time);
-  s.platforms.forEach((p, i) => {
-    if (p.x + p.w >= camera.x - 40 && p.x <= camera.x + camera.width + 40 &&
-        p.y + p.h >= camera.y - 40 && p.y <= camera.y + camera.height + 40)
-      drawTerrainPlatform(c, p, i, o.time, map.theme);
-  });
+  if (!drawImageTerrain(c, s)) {
+    drawTerrainScenery(c, s, s.platforms, o.time);
+    s.platforms.forEach((p, i) => {
+      if (p.x + p.w >= camera.x - 40 && p.x <= camera.x + camera.width + 40 &&
+          p.y + p.h >= camera.y - 40 && p.y <= camera.y + camera.height + 40)
+        drawTerrainPlatform(c, p, i, o.time, map.theme);
+    });
+  }
   drawHazards(c, s, o);
   for (const box of s.crates)
     crate(
@@ -412,7 +416,7 @@ export function renderGame(
               ((dy / len) * speed + (def.attack === "mine" ? -65 : active.vy * inheritance)) * dt +
               0.5 * gravity * dt * dt;
           if (
-            s.platforms.some(
+            bodyTerrain(s.platforms, x, y, 0).some(
               (p) => x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h,
             ) ||
             (s.hasWater !== false && y >= s.waterY)
@@ -538,7 +542,10 @@ export function renderGame(
     c.restore();
   }
   for (const e of s.explosions) {
-    const progress = e.age / 0.55;
+    // Never draw expired particles: even at zero alpha, a negative Canvas arc
+    // radius throws and prevents the animation loop from scheduling its next frame.
+    if (e.age >= EXPLOSION_SECONDS) continue;
+    const progress = Math.max(0, e.age / EXPLOSION_SECONDS);
     const color = e.color ?? "#f3cf7d";
     c.globalAlpha = Math.max(0, 1 - progress);
     if (e.kind === "melee") {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FIXED_STEP, GameEngine } from "../shared/game";
+import { EXPLOSION_SECONDS, FIXED_STEP, GameEngine } from "../shared/game";
 import { ClientPrediction, interpolateStates } from "../src/prediction";
 import { MAX_PENDING_FRAMES, NETWORK_STEP, type InputFrame, type ServerState } from "../shared/protocol";
 import type { PlayerInput } from "../shared/types";
@@ -110,6 +110,33 @@ test("fractional prediction follows slow motion and preserves the shown pose dur
     "A mid-frame server correction accounts for the fractional drawing offset");
   assert.equal(reconciled.players[0].hp, 80, "Only the pose is smoothed; health is authoritative immediately");
   assert.equal(client.pendingCount, 0);
+});
+
+test("fractional prediction expires explosions without changing authority, including during slow motion", () => {
+  for (const slowMotion of [false, true]) {
+    const server = createGame({ mode: "practice", mineCount: 0 });
+    server.state.phase = "settling";
+    server.state.resolution = {
+      affectedPlayerIds: [], pendingDamage: {}, drownedPlayerIds: [], focus: null,
+      reveal: null, slowMotionRemaining: slowMotion ? 0.2 : 0, impact: 0.5,
+    };
+    server.state.explosions = [
+      { id: "blast", x: 500, y: 500, radius: 96, age: EXPLOSION_SECONDS - 0.001 },
+      { id: "death-blast", x: 550, y: 500, radius: 96, age: EXPLOSION_SECONDS - 0.001 },
+      { id: "fresh-blast", x: 600, y: 500, radius: 96, age: 0 },
+    ];
+    const authority = snapshot(server);
+    const client = new ClientPrediction(() => assert.fail("A fractional frame must not send input"));
+    client.receive(authority, "p1", 0);
+    const dt = NETWORK_STEP / 2;
+    const shown = client.advance(dt, dt * 1000)!;
+    assert.deepEqual(shown.explosions.map((blast) => blast.id), ["fresh-blast"]);
+    assert.ok(Math.abs(shown.explosions[0].age - dt * (slowMotion ? 0.28 : 1)) < 1e-10);
+    assert.deepEqual(snapshot(server), authority, "Visual expiry must not mutate the server");
+    client.receive(authority, "p1", 9);
+    assert.deepEqual(client.advance(0, 9)!.explosions, shown.explosions,
+      "Reconciliation must not resurrect an expired visual");
+  }
 });
 
 test("a predicted end of control locks commands before the server acknowledges it", () => {

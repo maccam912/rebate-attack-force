@@ -1,4 +1,4 @@
-import { GameEngine } from "../shared/game";
+import { EXPLOSION_SECONDS, GameEngine } from "../shared/game";
 import {
   INTERPOLATION_DELAY,
   MAX_PENDING_FRAMES,
@@ -310,7 +310,10 @@ export class ClientPrediction {
       mines: (state.mines ?? []).map((mine) => ({
         ...mine, x: mine.x + mine.vx * physicalDt, y: mine.y + mine.vy * physicalDt,
       })),
-      explosions: state.explosions.map((explosion) => ({ ...explosion, age: explosion.age + physicalDt })),
+      // The visual lead can cross expiry before the next fixed physics step.
+      explosions: state.explosions
+        .map((explosion) => ({ ...explosion, age: explosion.age + physicalDt }))
+        .filter((explosion) => explosion.age < EXPLOSION_SECONDS),
     };
   }
 }

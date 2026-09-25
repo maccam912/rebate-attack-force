@@ -1,4 +1,5 @@
-import type { Platform } from "./types.js";
+import type { Platform, Point } from "./types.js";
+import { IMAGE_MAP_DATA } from "./image-maps.generated.js";
 
 export interface ArenaMap {
   id: string;
@@ -12,7 +13,13 @@ export interface ArenaMap {
   hasWater: boolean;
   theme: "scrapyard" | "cave" | "jungle" | "islands" | "yard";
   platforms: Platform[];
-  /** Authored safe team ledges, in starting-team order. */
+  /** One source pixel is one world unit. Collision is compiled from this PNG's alpha. */
+  image?: string;
+  /** Image-derived positions supported by curved ground or branches. */
+  spawnGroups?: Point[][];
+  supplySites?: Point[];
+  mineSites?: Point[];
+  /** Legacy team ledges, or representative supports for image spawnGroups. */
   spawnPlatformIds: string[];
 }
 
@@ -177,6 +184,11 @@ export const MAPS: ArenaMap[] = [
     ],
     spawnPlatformIds: ["jungle-west-crown-top", "jungle-east-crown-top", "jungle-heart-crown-top", "jungle-great-crown-top", "jungle-west-root", "jungle-east-root", "jungle-center-root", "jungle-river-rock", "jungle-west-tortoise", "jungle-crocodile", "jungle-east-tortoise", "jungle-west-tree-top", "jungle-east-tree-top", "jungle-west-branch", "jungle-center-branch", "jungle-east-branch", "jungle-heart-branch", "jungle-west-high", "jungle-east-high", "jungle-west-lookout", "jungle-center-lookout", "jungle-east-lookout", "jungle-high-branch", "jungle-west-summit", "jungle-east-summit"],
   },
+  ...IMAGE_MAP_DATA.map(({ rectangles, spawns, ...data }): ArenaMap => ({
+    ...data,
+    platforms: rectangles.map(([x, y, w, h], index) => ({ id: `${data.id}-pixel-${index}`, x, y, w, h })),
+    spawnPlatformIds: spawns.map((index) => `${data.id}-pixel-${index}`),
+  })),
 ];
 
 export function isMapId(value: unknown): value is string {
@@ -185,4 +197,16 @@ export function isMapId(value: unknown): value is string {
 
 export function getMap(id?: string): ArenaMap {
   return MAPS.find((map) => map.id === id) ?? MAPS[0]!;
+}
+
+/** Shared by arena creation and decoding compact image-map network snapshots. */
+export function mapPlatforms(map: ArenaMap, sections: number): Platform[] {
+  return Array.from({ length: sections }, (_, section) =>
+    map.platforms.filter((platform) =>
+      (!platform.boundary || platform.boundary !== "left" || section === 0) &&
+      (!platform.boundary || platform.boundary !== "right" || section === sections - 1))
+      .map((platform) => ({ ...platform,
+        id: section === 0 ? platform.id : `${platform.id}:${section}`,
+        x: platform.x + section * map.width,
+      }))).flat();
 }

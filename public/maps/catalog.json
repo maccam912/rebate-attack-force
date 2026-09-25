@@ -1,0 +1,20 @@
+{
+  "mossback-grotto": {
+    "name": "Mossback Woods",
+    "description": "Forgiving woodland. Fall through the leaves into real branching trees, scramble through forks, and recover on the rolling forest floor. The trunks and branches are solid; foliage is scenery.",
+    "terrain": "Safer · Branching trees · Dry ground",
+    "theme": "jungle", "size": "Large"
+  },
+  "amber-arches": {
+    "name": "Razorback Range",
+    "description": "Treacherous alpine ridges. Sharp summits throw you off balance and steep scree faces send you sliding toward flooded ravines. Find shelter in the foothills or grapple between peaks.",
+    "terrain": "Dangerous · Sliding peaks · Flooded ravines",
+    "theme": "islands", "size": "Large", "waterY": 1880
+  },
+  "mooncap-garden": {
+    "name": "Moonwell Sinkhole",
+    "description": "A deep flooded sinkhole crossed by a twisting exposed root. Start on the sheltered rims, descend into eroded wall pockets, and risk the broken crossings above the water.",
+    "terrain": "Very dangerous · Exposed roots · Deep water",
+    "theme": "cave", "size": "Large", "waterY": 2070
+  }
+}

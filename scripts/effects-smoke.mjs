@@ -39,6 +39,8 @@ try {
     const { GameEngine } = await import("/shared/game.ts");
     const { WEAPONS } = await import("/shared/weapons.ts");
     const { renderGame } = await import("/src/renderer.ts");
+    const { ClientPrediction } = await import("/src/prediction.ts");
+    const { NETWORK_STEP } = await import("/shared/protocol.ts");
     const { drawVisionEffects, STATUS_PRESENTATION } = await import("/src/effect-renderer.ts");
     const state = new GameEngine({ mode: "practice" }).state;
     const canvas = document.createElement("canvas");
@@ -47,6 +49,32 @@ try {
     const options = { camera: { x: 0, y: 0, zoom: 1, width: 1440, height: 1000 },
       viewport: { width: 1440, height: 1000, dpr: 1 }, tool: "grapple", power: 0,
       time: 3, menu: false, visionEffects: true };
+    // Fractional prediction used to age particles beyond their lifetime, giving
+    // Canvas.arc a negative radius and permanently stopping the animation loop.
+    const game = new GameEngine({ mode: "practice", mineCount: 0 });
+    const owner = game.state.activeTeamId;
+    const client = new ClientPrediction(() => {});
+    const packet = () => {
+      const { state, simulation } = game.capture();
+      return { ...state, net: { epoch: "explosion-regression", tick: 0, ack: 0, simulation } };
+    };
+    const blast = { id: "blast", x: 400, y: 400, radius: 96, age: 0.549 };
+    game.state.explosions = [blast, { ...blast, id: "death-blast", x: 460 }];
+    client.receive(packet(), owner, 0);
+    renderGame(c, client.advance(NETWORK_STEP / 2, 1000 / 120), options);
+    // Expired effects must also be safe if supplied directly to the renderer.
+    for (const kind of [undefined, "melee", "pull", "push", "spring"])
+      for (const age of [0, 0.549, 0.55, 0.56]) {
+        game.state.explosions = [{ ...blast, kind, age }];
+        renderGame(c, game.state, options);
+      }
+    // The same client must still render after switching to another team's turn.
+    game.state.turn++;
+    game.state.activeTeamId = game.state.teams.find((team) => team.id !== owner).id;
+    game.state.activePlayerId = game.state.players.find((frog) => frog.teamId === game.state.activeTeamId).id;
+    game.state.explosions = [];
+    client.receive(packet(), owner, 100);
+    renderGame(c, client.advance(NETWORK_STEP, 117), options);
     const paint = (visionEffects, reducedMotion = false, time = 3) => {
       c.fillStyle = "#25362f"; c.fillRect(0, 0, 1440, 1000);
       for (let x = 0; x < 1440; x += 19) {
@@ -111,7 +139,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   assert.ok(await page.locator("#arsenal-search").isVisible());
   assert.deepEqual(errors, []);
-  console.log(`PASS: ${count} weapon cards, effect search/categories, 10 hazard renders, all visual debuffs, spectator isolation, reduced motion, mobile layout`);
+  console.log(`PASS: ${count} weapon cards, effect search/categories, 10 hazard renders, all visual debuffs, spectator isolation, reduced motion, mobile layout, predicted explosion expiry and turn handoff`);
 } finally {
   await browser.close();
 }

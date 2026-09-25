@@ -737,3 +737,64 @@ test("solo human can play bots; offline matches pause and abandoned bot rooms ex
   cleanup.execute();
   await waitFor(() => !matchMaker.getLocalRoomById(host.room.roomId), "abandoned bot room cleaned up");
 });
+
+test("room browser lists joinable lobbies and tracks their lifecycle", { timeout: 15000 }, async () => {
+  const directory = async () => {
+    const response = await fetch(`${endpoint}/api/rooms`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    return (await response.json()).rooms as import("../shared/rooms").AvailableRoom[];
+  };
+  const host = await create("Parent <&>");
+  const id = host.room.roomId;
+  await waitFor(() => !!host.lobby, "directory host joined");
+  assert.deepEqual((await directory()).find((room) => room.roomId === id), {
+    roomId: id, hostName: "Parent <&>", mapId: DEFAULT_MAP_ID, teams: 1, maxTeams: null,
+  });
+  host.room.send("mapSettings", { mapId: MAPS[1].id });
+  host.room.send("addBot");
+  await waitFor(() => host.lobby?.players.length === 2 && host.lobby.mapId === MAPS[1].id, "directory settings");
+  assert.equal((await directory()).find((room) => room.roomId === id)!.teams, 2);
+  assert.equal((await directory()).find((room) => room.roomId === id)!.mapId, MAPS[1].id);
+  const child = await join(id, "Kid");
+  await waitFor(() => host.lobby?.players.length === 3, "directory click joins exact room");
+  const liveRoom = matchMaker.getLocalRoomById(id)!;
+  liveRoom.maxClients = 2;
+  assert.equal((await directory()).some((room) => room.roomId === id), false, "full rooms hidden");
+  liveRoom.maxClients = Infinity;
+  assert.ok((await directory()).some((room) => room.roomId === id), "seat availability restores listing");
+  await host.room.leave();
+  await waitFor(() => child.lobby?.hostId === child.room.sessionId, "directory host migration");
+  assert.equal((await directory()).find((room) => room.roomId === id)!.hostName, "Kid");
+
+  const token = child.room.reconnectionToken;
+  child.room.reconnection.enabled = false;
+  child.room.connection.close();
+  await waitFor(() => (liveRoom as AttackRoom).availableRoom() === null, "unattended room hidden despite bot");
+  assert.equal((await directory()).some((room) => room.roomId === id), false);
+  const restored = observe(await new Client(endpoint).reconnect(token));
+  await waitFor(() => !!restored.lobby, "directory reconnected");
+  assert.ok((await directory()).some((room) => room.roomId === id));
+  restored.room.send("start");
+  await waitFor(() => !!restored.state, "directory match started");
+  assert.equal((await directory()).some((room) => room.roomId === id), false, "started match hidden");
+  await restored.room.leave();
+
+  const abandoned = await create("Leaving");
+  await waitFor(() => !!abandoned.lobby, "leaving lobby");
+  await abandoned.room.leave();
+  assert.equal((await directory()).some((room) => room.roomId === abandoned.room.roomId), false, "closed lobby removed");
+
+  const limited = observe(await new Client(endpoint).create("attack-limited", { name: "Limited" }));
+  await waitFor(() => !!limited.lobby, "limited directory lobby");
+  const limitedRoom = matchMaker.getLocalRoomById(limited.room.roomId) as AttackRoom;
+  assert.equal(limitedRoom.availableRoom()?.maxTeams, 3);
+  limited.room.send("addBot");
+  limited.room.send("addBot");
+  await waitFor(() => limited.lobby?.players.length === 3, "bots fill limited room");
+  assert.equal(limitedRoom.availableRoom(), null, "bots consume directory capacity");
+  limited.room.send("removeBot", { teamId: limited.lobby!.players.find((team) => team.bot)!.id });
+  await waitFor(() => limited.lobby?.players.length === 2, "bot removal frees seat");
+  assert.equal(limitedRoom.availableRoom()?.teams, 2);
+  await limited.room.leave();
+});

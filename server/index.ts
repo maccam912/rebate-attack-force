@@ -11,8 +11,17 @@ const dist = fileURLToPath(new URL("../dist/", import.meta.url));
 
 export function createGameServer() {
   const maxTeams = serverMaxTeams(process.env.MAX_TEAMS);
+  // Like the matches themselves, the directory belongs to this server process.
+  const rooms = new Set<AttackRoom>();
   class ConfiguredAttackRoom extends AttackRoom {
     protected override readonly maxTeams = maxTeams;
+    override async onCreate(options: unknown = {}) {
+      await super.onCreate(options);
+      rooms.add(this);
+    }
+    onDispose() {
+      rooms.delete(this);
+    }
   }
   let ready = true;
   const gameServer = new Server({
@@ -25,6 +34,14 @@ export function createGameServer() {
     }),
     express: (app) => {
       app.disable("x-powered-by");
+      app.get("/api/rooms", (_req, res) => {
+        res.set("Cache-Control", "no-store").json({
+          rooms: ready ? [...rooms].flatMap((room) => {
+            const listing = room.availableRoom();
+            return listing ? [listing] : [];
+          }) : [],
+        });
+      });
       app.get("/healthz", (_req, res) =>
         res.status(200).json({ status: "ok" }),
       );

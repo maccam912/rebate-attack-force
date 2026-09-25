@@ -93,6 +93,18 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .join-fields { display: flex; gap: 8px; margin-top: 12px; }
 .join-fields input { min-width: 0; }
 .join-fields button, .copy-button { padding: 8px 12px; background: #ffffff12; border: 1px solid var(--line); font-size: 11px; }
+.room-browser { margin: 18px 0; padding: 14px; background: #0b201a88; border: 1px solid var(--line); border-radius: 8px; }
+.room-browser-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.room-browser-heading h3 { margin: 0; font-size: 13px; }
+.room-browser-status { color: var(--dim); font-size: 11px; line-height: 1.5; margin: 10px 0 0; }
+.room-browser-list { display: grid; gap: 8px; max-height: 260px; overflow-y: auto; }
+.room-browser-list:not(:empty) { margin-top: 12px; }
+.room-browser-game { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 58px; padding: 12px; text-align: left; background: #ffffff09; border: 1px solid var(--line); }
+.room-browser-game:hover, .room-browser-game:focus-visible { border-color: var(--lime); background: #d0e77e15; }
+.room-browser-game > span:first-child { min-width: 0; }
+.room-browser-game strong { display: block; overflow-wrap: anywhere; font-size: 13px; }
+.room-browser-game small { display: block; color: var(--dim); font-size: 10px; margin-top: 5px; }
+.room-browser-join { flex-shrink: 0; color: var(--lime); font-size: 12px; }
 .live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--lime); }
 .session-title { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 10px; margin-bottom: 14px; }
 .room-code { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px; border: 1px dashed #d0e77e55; border-radius: 8px; margin-bottom: 16px; }

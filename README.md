@@ -15,7 +15,7 @@ Open **http://localhost:5173**. Vite and the Colyseus room server start together
 
 - **Practice:** unlimited movement time, a target frog, respawns, and all 48 weapons refilled every turn.
 - **Local:** share one device and take turns, or choose an AI bot as your opponent. Add more human or bot teams in the setup screen.
-- **Online:** create a private room, copy its invite link, and bring friends or use **Add bot** to play alone. Everyone chooses a callsign; no accounts are involved. The host adds/removes bots, chooses each team’s frog count and starting HP, and sets the number of starting mines before starting the match. The server operator can configure room capacity; there is no fixed four-team limit.
+- **Online:** create a room and have friends open **Online** and click your game under **Games waiting to start**, or use **Add bot** to play alone. The list refreshes automatically every three seconds and shows the host, map, and team count. Waiting rooms are visible to everyone on the same server; full, started, and unattended rooms are hidden. Room codes and invite links still work. Everyone chooses a callsign; no accounts are involved. The host adds/removes bots, chooses each team’s frog count and starting HP, and sets the number of starting mines before starting the match. The server operator can configure room capacity; there is no fixed four-team limit.
 
 Bots aim and fire stocked weapons, avoid friendly fire when choosing shots, and move or jump along platforms to find a shot. They follow the same ammunition, damage, and turn rules as humans. Online bots run on the server. An online room pauses when every human disconnects, even if it contains bots.
 
@@ -67,6 +67,13 @@ Choose a map in practice, local setup, or the online lobby. Each has a thumbnail
 | Crystal Hollow | Medium · 3,400 × 1,700 | Enclosed crystal cavern with a ceiling, walls, and no water |
 | Razor Reef | Large · 4,000 × 2,050 | Narrow sea stacks, stepping stones, and dangerous water gaps |
 | Wild Canopy | Large · 5,600 × 2,300 | Jungle trees, branches, and stationary tortoise and crocodile platforms above a river |
+| Razorback Range | Large · 3,600 × 2,000 | Dangerous knife-edge mountains, sliding scree faces, and flooded ravines |
+| Moonwell Sinkhole | Large · 2,600 × 2,200 | Very dangerous vertical chasm, eroded wall pockets, and exposed root crossings over water |
+| Mossback Woods | Large · 3,200 × 1,850 | Safer solid tree trunks and branching routes, pass-through foliage, and a dry rolling floor |
+
+The three PNG maps use the image itself for terrain: **only alpha 255 (100% opaque) is solid; alpha 0–254 is pass-through scenery**. One image pixel equals one world pixel. This applies to frogs, weapons, mines, grapples, and bot targeting. Antialiased edge pixels with any transparency are not solid. Gentle slopes are walkable; slopes steeper than about 37° and pointed summits make frogs slide. Tree foliage is pass-through, while trunks and branches catch falls.
+
+To make your own, put a transparent PNG in `public/maps/` and run `npm run maps:compile` (also runs before dev, build, and tests). No separate collision mask or hand-written platform coordinates are needed. Safe individual frog positions are detected on curved ground and branches and grouped into team starting areas; no broad flat platforms are required. Optional names, descriptions, themes, and water height go in `public/maps/catalog.json`. See [PNG map authoring](docs/image-maps.md) for details. Edit the PNGs directly; `npm run maps:paint` recreates the bundled artwork and overwrites those three images.
 
 The camera follows the active frog. Extra teams start on separate ledges; very large rosters extend the selected layout horizontally so teams do not share spawn positions. Edge markers point toward opponents outside the view.
 
@@ -159,6 +166,7 @@ npm test
 npm run build
 # With npm run dev running in another terminal:
 npm run test:browser
+node scripts/rooms-smoke.mjs
 npm run test:bots
 npm run test:mines
 npm run test:mobile

@@ -13,7 +13,8 @@ import type {
 } from "./types.js";
 
 import { ropeFixedLength, ropePathLength, updateRopePath } from "./rope.js";
-import { DEFAULT_MAP_ID, getMap, type ArenaMap } from "./maps.js";
+import { bodyTerrain, imageSurface, terrainIn } from "./image-terrain.js";
+import { DEFAULT_MAP_ID, getMap, mapPlatforms, type ArenaMap } from "./maps.js";
 import { DEFAULT_MINE_COUNT, DEFAULT_TEAM_SETTINGS, teamColor, teamSettings, validMineCount } from "./settings.js";
 import { createInventory, WEAPON_CATALOG, WEAPON_IDS, type WeaponDefinition } from "./weapons.js";
 import type { GameSnapshot } from "./protocol.js";
@@ -32,6 +33,7 @@ export const TURN_SECONDS = 45;
 export const RETREAT_SECONDS = 5;
 export const DAMAGE_REVEAL_SECONDS = 1.6;
 export const DAMAGE_APPLY_SECONDS = 0.55;
+export const EXPLOSION_SECONDS = 0.55;
 const SETTLED_HOLD_SECONDS = 0.35;
 export const DOUBLE_JUMP_SECONDS = 0.32;
 export const MAX_SOUND_EVENTS = 128;
@@ -66,6 +68,10 @@ export const SPAWNS = [
 function frogSpawn(map: ArenaMap, teamIndex: number, frogIndex: number): Point {
   const slot = teamIndex % map.spawnPlatformIds.length;
   const offset = Math.floor(teamIndex / map.spawnPlatformIds.length) * map.width;
+  if (map.spawnGroups) {
+    const point = map.spawnGroups[slot]![frogIndex]!;
+    return { x: point.x + offset, y: point.y };
+  }
   if (map.id === DEFAULT_MAP_ID && slot < SPAWNS.length) {
     const spawn = SPAWNS[slot]!;
     const direction = slot === 1 || slot === 3 ? -1 : 1;
@@ -85,20 +91,12 @@ export function makePlatforms(): Platform[] {
   return getMap().platforms.map((platform) => ({ ...platform }));
 }
 
-/** Use authored ledges first, then repeat the layout without internal cave walls. */
+/** Use safe team areas first, then repeat the layout without internal cave walls. */
 function makeArena(map: ArenaMap, teamCount: number): { width: number; platforms: Platform[] } {
   const sections = Math.ceil(teamCount / map.spawnPlatformIds.length);
   return {
     width: map.width * sections,
-    platforms: Array.from({ length: sections }, (_, section) =>
-      map.platforms.filter((platform) =>
-        (!platform.boundary || platform.boundary !== "left" || section === 0) &&
-        (!platform.boundary || platform.boundary !== "right" || section === sections - 1))
-        .map((platform) => ({
-          ...platform,
-          id: section === 0 ? platform.id : `${platform.id}:${section}`,
-          x: platform.x + section * map.width,
-        }))).flat(),
+    platforms: mapPlatforms(map, sections),
   };
 }
 
@@ -435,7 +433,7 @@ export class GameEngine {
       resolution.impact *= Math.exp(-10 * realDt);
     }
     this.state.explosions.forEach((explosion) => { explosion.age += dt; });
-    this.state.explosions = this.state.explosions.filter((explosion) => explosion.age < 0.55);
+    this.state.explosions = this.state.explosions.filter((explosion) => explosion.age < EXPLOSION_SECONDS);
     if (this.state.phase === "finished") return;
     if (this.state.phase === "damage") {
       this.updateDamageReveal(realDt);
@@ -709,7 +707,11 @@ export class GameEngine {
     const sticky = hasStatus(player, "sticky");
     const chilled = hasStatus(player, "chilled");
     const walkSpeed = WALK_SPEED * (sticky ? 0.35 : chilled ? 0.58 : hasStatus(player, "heavy") ? 0.7 : 1);
-    const wasGrounded = player.grounded;
+    const imageTerrain = !!getMap(this.state.mapId).image;
+    const surface = imageTerrain && player.vy >= 0 && !player.rope
+      ? imageSurface(this.state.platforms, player.x, player.y + PLAYER_RADIUS) : null;
+    const sliding = surface?.steep === true;
+    const wasGrounded = player.grounded && !sliding;
     if (axis) {
       player.facing = axis > 0 ? 1 : -1;
       if (player.rope) {
@@ -729,12 +731,19 @@ export class GameEngine {
           const acceleration = (player.tumble > 0 ? 520 : 1800) * (slippery ? 0.18 : sticky ? 0.5 : 1);
           player.vx += axis * Math.min(acceleration * dt, walkSpeed - speed);
         }
-      } else player.vx += axis * (player.tumble > 0 ? 240 : 520) * dt;
+      } else player.vx += axis * (sliding ? 80 : player.tumble > 0 ? 240 : 520) * dt;
     }
     if (wasGrounded) {
       const rolling = player.tumble > 0 || Math.abs(player.vx) > WALK_SPEED + 10;
       player.vx *= Math.exp(-(slippery ? (this.canMovePhase() ? 0.12 : 1.8) : sticky ? 14 : rolling ? 0.9 : axis ? 0 : 10) * dt);
     } else player.vx *= Math.exp(-0.025 * dt);
+
+    if (sliding) {
+      // Gravity along the actual silhouette defeats uphill steering on steep rock.
+      // A pointed summit deterministically sheds a frog to one side.
+      player.vx += GRAVITY * surface.slope / (1 + surface.slope ** 2) * dt;
+      player.grounded = false;
+    }
 
     player.vy += GRAVITY * dt * (hasStatus(player, "heavy") ? 2.1 : hasStatus(player, "feather") ? 0.3 : 1);
     let reelSpeed = 0;
@@ -763,7 +772,8 @@ export class GameEngine {
     }
     limitBodySpeed(player);
     player.grounded = false;
-    this.movePlayer(player, player.vx * dt, player.vy * dt, true);
+    this.movePlayer(player, player.vx * dt, player.vy * dt, true,
+      wasGrounded && player.vy >= 0 && player.tumble <= 0 && !player.rope && imageTerrain);
 
     this.constrainRope(player, reelSpeed);
     updateBodyAttitude(player, dt);
@@ -898,7 +908,7 @@ export class GameEngine {
   }
 
   /** Small swept axis moves keep fast launches from crossing thin platforms. */
-  private movePlayer(player: Player, dx: number, dy: number, physical = false): void {
+  private movePlayer(player: Player, dx: number, dy: number, physical = false, walkSlope = false): void {
     const steps = Math.max(
       1,
       Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / 6),
@@ -906,7 +916,14 @@ export class GameEngine {
     let stepX = dx / steps;
     let stepY = dy / steps;
     let impactSound: { kind: "land" | "bounce"; speed: number } | undefined;
-    const contact = (nx: number, ny: number) => {
+    const contact = (nx: number, ny: number, footY = player.y + PLAYER_RADIUS) => {
+      const surface = ny < 0 && getMap(this.state.mapId).image
+        ? imageSurface(this.state.platforms, player.x, footY) : null;
+      if (surface?.steep) {
+        const length = Math.hypot(surface.slope, 1);
+        nx = surface.slope / length;
+        ny = -1 / length;
+      }
       if (physical) {
         const speed = -(player.vx * nx + player.vy * ny);
         const damage = surfaceImpact(player, nx, ny);
@@ -938,11 +955,33 @@ export class GameEngine {
         }
         if (ny < 0 && player.vy >= 0) player.grounded = true;
       }
+      if (surface?.steep) player.grounded = false;
     };
     for (let step = 0; step < steps; step++) {
       let nextX = clamp(player.x + stepX, PLAYER_RADIUS, this.state.width - PLAYER_RADIUS);
+      if (walkSlope && stepX) {
+        // Step up pixel staircases, only with full headroom. Never climb real walls
+        // or allow airborne/reeling/weapon-launched frogs to use this assistance.
+        const free = (y: number) => !bodyTerrain(this.state.platforms, nextX, y, PLAYER_RADIUS).some((p) =>
+          nextX + PLAYER_RADIUS > p.x && nextX - PLAYER_RADIUS < p.x + p.w &&
+          y + PLAYER_RADIUS > p.y && y - PLAYER_RADIUS < p.y + p.h);
+        if (!free(player.y)) {
+          for (let rise = 1; rise <= 6; rise++) {
+            if (!free(player.y - rise)) continue;
+            if (imageSurface(this.state.platforms, nextX, player.y - rise + PLAYER_RADIUS)?.steep) break;
+            // The entire upward sweep must be clear, not merely its endpoint.
+            const ceiling = terrainIn(this.state.platforms, player.x - PLAYER_RADIUS,
+              player.y - PLAYER_RADIUS - rise, player.x + PLAYER_RADIUS, player.y - PLAYER_RADIUS)
+              .some((p) => player.x + PLAYER_RADIUS > p.x && player.x - PLAYER_RADIUS < p.x + p.w &&
+                player.y - PLAYER_RADIUS > p.y && player.y - PLAYER_RADIUS - rise < p.y + p.h);
+            if (!ceiling) player.y -= rise;
+            break;
+          }
+        }
+      }
       let hitX = 0;
-      for (const platform of this.state.platforms) {
+      for (const platform of terrainIn(this.state.platforms, Math.min(player.x, nextX) - PLAYER_RADIUS,
+        player.y - PLAYER_RADIUS, Math.max(player.x, nextX) + PLAYER_RADIUS, player.y + PLAYER_RADIUS)) {
         const overlapsY =
           player.y + PLAYER_RADIUS > platform.y + 0.05 &&
           player.y - PLAYER_RADIUS < platform.y + platform.h - 0.05;
@@ -970,7 +1009,8 @@ export class GameEngine {
 
       let nextY = player.y + stepY;
       let hitY = 0;
-      for (const platform of this.state.platforms) {
+      for (const platform of terrainIn(this.state.platforms, player.x - PLAYER_RADIUS,
+        Math.min(player.y, nextY) - PLAYER_RADIUS, player.x + PLAYER_RADIUS, Math.max(player.y, nextY) + PLAYER_RADIUS)) {
         const overlapsX =
           player.x + PLAYER_RADIUS > platform.x &&
           player.x - PLAYER_RADIUS < platform.x + platform.w;
@@ -992,8 +1032,16 @@ export class GameEngine {
         }
       }
       if (nextY <= -220 && stepY < 0) hitY = 1;
-      if (hitY) { contact(0, hitY); stepY = 0; }
+      if (hitY) { contact(0, hitY, nextY + PLAYER_RADIUS); stepY = 0; }
       player.y = Math.max(-220, nextY);
+      if (walkSlope && !hitY && stepY >= 0) {
+        const foot = player.y + PLAYER_RADIUS;
+        const floor = terrainIn(this.state.platforms, player.x - PLAYER_RADIUS, foot,
+          player.x + PLAYER_RADIUS, foot + 6).filter((p) => p.y >= foot && p.y <= foot + 6 &&
+            player.x + PLAYER_RADIUS > p.x && player.x - PLAYER_RADIUS < p.x + p.w)
+          .sort((a, b) => a.y - b.y)[0];
+        if (floor) { player.y = floor.y - PLAYER_RADIUS; contact(0, -1); stepY = 0; }
+      }
     }
     if (impactSound) this.playerSound(impactSound.kind, player,
       { intensity: clamp(impactSound.speed / 1000, 0.15, 1) });
@@ -1165,7 +1213,7 @@ export class GameEngine {
           } else detonate = true;
           break;
         }
-        const platform = this.state.platforms.find((candidate) =>
+        const platform = bodyTerrain(this.state.platforms, projectile.x, projectile.y, bodyRadius).find((candidate) =>
           projectile.x + bodyRadius >= candidate.x && projectile.x - bodyRadius <= candidate.x + candidate.w &&
           projectile.y + bodyRadius >= candidate.y && projectile.y - bodyRadius <= candidate.y + candidate.h);
         if (platform) {
@@ -1240,7 +1288,7 @@ export class GameEngine {
           const px = mine.x, py = mine.y;
           mine.x = clamp(mine.x + mine.vx * dt / steps, 8, this.state.width - 8);
           mine.y += mine.vy * dt / steps;
-          const platform = this.state.platforms.find((p) => mine.x + 8 >= p.x && mine.x - 8 <= p.x + p.w && mine.y + 8 >= p.y && mine.y - 8 <= p.y + p.h);
+          const platform = bodyTerrain(this.state.platforms, mine.x, mine.y, 8).find((p) => mine.x + 8 >= p.x && mine.x - 8 <= p.x + p.w && mine.y + 8 >= p.y && mine.y - 8 <= p.y + p.h);
           if (!platform) continue;
           if (py + 8 <= platform.y + 0.1) {
             contactSpeed = Math.max(contactSpeed, Math.abs(mine.vy));
@@ -1461,7 +1509,7 @@ export class GameEngine {
     return !platform.boundary && y >= radius && x - radius >= platform.x &&
       x + radius <= platform.x + platform.w &&
       (this.state.hasWater === false || platform.y < this.state.waterY) &&
-      !this.state.platforms.some((other) => other !== platform &&
+      !bodyTerrain(this.state.platforms, x, y, radius).some((other) => other !== platform &&
         x + radius > other.x && x - radius < other.x + other.w &&
         y + radius > other.y && y - radius < other.y + other.h);
   }
@@ -1476,6 +1524,18 @@ export class GameEngine {
   }
 
   private spawnCrates(): void {
+    const map = getMap(this.state.mapId);
+    if (map.supplySites) {
+      this.state.crates = [];
+      for (let offset = 0; offset < this.state.width; offset += map.width) {
+        for (const point of map.supplySites) {
+          const x = point.x + offset;
+          if (this.state.crates.some((crate) => Math.hypot(crate.x - x, crate.y - point.y) < 200)) continue;
+          this.state.crates.push({ id: this.id("crate"), x, y: point.y });
+        }
+      }
+      return;
+    }
     const player = this.state.players.find(
       (candidate) => candidate.id === this.state.activePlayerId,
     )!;
@@ -1488,6 +1548,7 @@ export class GameEngine {
       )
       .sort((a, b) => a.y - b.y)[0];
     const platform = support ?? this.state.platforms.find((candidate) => this.cratePoint(candidate))!;
+    if (!platform) { this.state.crates = []; return; }
     const direction = player.x > platform.x + platform.w / 2 ? -1 : 1;
     const nearX = clamp(
       player.x + direction * 110,
@@ -1509,12 +1570,22 @@ export class GameEngine {
     if (count === 0) return;
     const candidates: Point[] = [];
     const clearance = WEAPON_CATALOG.mine.range + PLAYER_RADIUS;
-    for (const platform of this.state.platforms) {
-      for (let x = platform.x + MINE_SPACING / 2; x <= platform.x + platform.w - MINE_SPACING / 2; x += MINE_SPACING) {
-        const y = platform.y - MINE_RADIUS;
-        if (!this.clearPlatformTop(platform, x, MINE_RADIUS) ||
-          this.state.players.some((player) => Math.hypot(player.x - x, player.y - y) < clearance)) continue;
-        candidates.push({ x, y });
+    const map = getMap(this.state.mapId);
+    if (map.mineSites) {
+      for (let offset = 0; offset < this.state.width; offset += map.width)
+        for (const point of map.mineSites) {
+          const x = point.x + offset;
+          if (this.state.players.every((player) => Math.hypot(player.x - x, player.y - point.y) >= clearance))
+            candidates.push({ x, y: point.y });
+        }
+    } else {
+      for (const platform of this.state.platforms) {
+        for (let x = platform.x + MINE_SPACING / 2; x <= platform.x + platform.w - MINE_SPACING / 2; x += MINE_SPACING) {
+          const y = platform.y - MINE_RADIUS;
+          if (!this.clearPlatformTop(platform, x, MINE_RADIUS) ||
+            this.state.players.some((player) => Math.hypot(player.x - x, player.y - y) < clearance)) continue;
+          candidates.push({ x, y });
+        }
       }
     }
     // Shuffle a finite set: completely occupied ledges can reduce safe capacity,
@@ -1541,7 +1612,8 @@ export class GameEngine {
     maxDistance: number,
   ): { x: number; y: number; distance: number } | null {
     let closest = maxDistance + 1;
-    for (const platform of this.state.platforms) {
+    for (const platform of terrainIn(this.state.platforms, Math.min(x, x + dx * maxDistance),
+      Math.min(y, y + dy * maxDistance), Math.max(x, x + dx * maxDistance), Math.max(y, y + dy * maxDistance))) {
       let near = 0;
       let far = maxDistance;
       let miss = false;

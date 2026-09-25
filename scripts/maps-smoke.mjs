@@ -10,7 +10,7 @@ const browser = await chromium.launch({
   executablePath: process.env.CHROME_PATH || (existsSync(systemChrome) ? systemChrome : undefined),
 });
 const errors = [];
-const ids = ["scrapyard", "pocket-yard", "crystal-cave", "razor-reef", "wild-canopy"];
+const ids = ["scrapyard", "pocket-yard", "crystal-cave", "razor-reef", "wild-canopy", "amber-arches", "mooncap-garden", "mossback-grotto"];
 const snapshot = (page) => page.evaluate(() => JSON.parse(window.render_game_to_text()));
 
 async function openPage(hasTouch = false) {
@@ -101,7 +101,7 @@ try {
     const first = await snapshot(local);
     assert.ok(first.players.every((frog) => frog.alive), "Each map has safe starting positions");
     assert.ok(first.platforms.length > 0, "Each map has playable terrain");
-    assert.equal(first.hasWater, !["pocket-yard", "crystal-cave"].includes(id));
+    assert.equal(first.hasWater, !["pocket-yard", "crystal-cave", "mossback-grotto"].includes(id));
     if (!first.hasWater) assert.ok(first.waterY > first.height, "Dry maps have no water inside the arena");
     else assert.ok(first.waterY < first.height, "Wet maps have water inside the arena");
     layouts.set(id, mapShape(first));
@@ -118,7 +118,7 @@ try {
   assert.equal(await local.inputValue("#map-select"), ids[0], "Next map wraps around the catalog");
   await local.click('[data-map-step="-1"]');
   assert.equal(await local.inputValue("#map-select"), ids.at(-1), "Previous map wraps around the catalog");
-  console.log("PASS: five distinct previews, full map dialogs, authored terrain, wet/dry layouts, practice startup, restart and setup persistence");
+  console.log("PASS: eight distinct previews, full map dialogs, authored terrain, wet/dry layouts, practice startup, restart and setup persistence");
 
   const mobile = await openPage(true);
   await chooseMap(mobile, "wild-canopy");
@@ -169,10 +169,14 @@ try {
   assert.notEqual(acceptedMapId, "wild-canopy", "The rejected final map is removed from the host preview");
   await mobile.waitForFunction((id) => document.querySelector("#map-select")?.value === id, acceptedMapId);
   assert.equal(await mobile.inputValue("#map-select"), acceptedMapId, "Host and guest previews agree after throttling");
+  await host.waitForTimeout(1200);
+  await chooseMap(host, "mossback-grotto");
+  await mobile.waitForFunction(() => document.querySelector("#map-select")?.value === "mossback-grotto");
   await host.locator("#launch-room:enabled").click();
   await Promise.all([host, mobile].map((page) => page.waitForFunction(() => JSON.parse(window.render_game_to_text()).screen === "playing")));
-  assert.deepEqual(mapShape(await snapshot(host)), layouts.get(acceptedMapId));
-  assert.deepEqual(mapShape(await snapshot(mobile)), layouts.get(acceptedMapId));
+  assert.deepEqual(mapShape(await snapshot(host)), layouts.get("mossback-grotto"));
+  assert.deepEqual(mapShape(await snapshot(mobile)), layouts.get("mossback-grotto"));
+  assert.ok((await snapshot(mobile)).platforms.length > 100, "Guest reconstructs the PNG collision geometry");
   await host.click("#menu-button");
   await host.click("#leave-button");
   await mobile.click("#menu-button");

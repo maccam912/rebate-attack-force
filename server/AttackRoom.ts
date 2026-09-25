@@ -5,7 +5,8 @@ import type { GameCommand, PlayerInput, Team, WeaponId } from "../shared/types";
 import { DEFAULT_MINE_COUNT, DEFAULT_TEAM_SETTINGS, MAX_FROGS, MAX_HP, MAX_MINES, teamColor, validMineCount, validTeamSettings } from "../shared/settings";
 import { MAX_SEQUENCE_GAP, type ServerState } from "../shared/protocol";
 import { WEAPON_IDS } from "../shared/weapons";
-import { DEFAULT_MAP_ID, isMapId } from "../shared/maps";
+import { DEFAULT_MAP_ID, getMap, isMapId } from "../shared/maps";
+import type { AvailableRoom } from "../shared/rooms";
 
 const NEUTRAL: PlayerInput = {
   left: false,
@@ -350,13 +351,16 @@ export class AttackRoom extends Room {
   private sendState(client?: Client): void {
     if (!this.game) return;
     const snapshot = this.game.capture();
+    const terrainImage = getMap(snapshot.state.mapId).image;
     const state: ServerState = {
       ...snapshot.state,
+      platforms: terrainImage ? [] : snapshot.state.platforms,
       net: {
         epoch: this.epoch,
         tick: Math.round(snapshot.simulation.elapsed / FIXED_STEP),
         ack: this.sequences.get(snapshot.state.activeTeamId) ?? 0,
         simulation: snapshot.simulation,
+        ...(terrainImage ? { terrainImage } : {}),
       },
     };
     if (client) client.send("state", state);
@@ -379,6 +383,19 @@ export class AttackRoom extends Room {
       maxTeams: this.maxTeams,
       mineCount: this.mineCount,
       mapId: this.mapId,
+    };
+  }
+
+  availableRoom(): AvailableRoom | null {
+    const host = this.guests.get(this.hostId);
+    if (this.game || this.locked || this.hasReachedMaxClients() ||
+        this.atTeamCapacity() || !host?.connected || host.bot) return null;
+    return {
+      roomId: this.roomId,
+      hostName: host.name,
+      mapId: this.mapId,
+      teams: this.guests.size,
+      maxTeams: this.maxTeams,
     };
   }
 

@@ -1,4 +1,5 @@
 import { GameEngine, PLAYER_RADIUS } from "./game.js";
+import { terrainIn } from "./image-terrain.js";
 import { hazardTouches, projectHazard, ropeIntersectsCircle } from "./effects.js";
 import type { ArenaHazard, GameState, Platform, Player, Point, StatusKind, WeaponId } from "./types.js";
 import { WEAPONS, type WeaponDefinition } from "./weapons.js";
@@ -39,7 +40,7 @@ function covered(state: GameState, a: Point, b: Point): boolean {
   if (length <= PLAYER_RADIUS) return false;
   const end = { x: a.x + (b.x - a.x) * (1 - PLAYER_RADIUS / length),
     y: a.y + (b.y - a.y) * (1 - PLAYER_RADIUS / length) };
-  return state.platforms.some((platform) => {
+  return terrainIn(state.platforms, Math.min(a.x, end.x), Math.min(a.y, end.y), Math.max(a.x, end.x), Math.max(a.y, end.y)).some((platform) => {
     const hit = intersection(a, end, platform);
     return hit !== null && hit * length > 1;
   });
@@ -103,7 +104,8 @@ function projectileScore(state: GameState, shooter: Player, weapon: WeaponDefini
     const previous = { x, y }, next = { x: x + vx * dt, y: y + vy * dt };
     let first = 2;
     let solid: Platform | null = null;
-    for (const platform of state.platforms) {
+    for (const platform of terrainIn(state.platforms, Math.min(x, next.x) - radius, Math.min(y, next.y) - radius,
+      Math.max(x, next.x) + radius, Math.max(y, next.y) + radius)) {
       const hit = intersection(previous, next, platform, radius);
       if (hit !== null && hit < first) { first = hit; solid = platform; }
     }

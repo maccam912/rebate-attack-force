@@ -1,4 +1,5 @@
 import type { GameCommand, GameState, PlayerInput } from "./types.js";
+import { getMap, mapPlatforms } from "./maps.js";
 
 /** Everything outside GameState that can affect a subsequent fixed simulation step. */
 export interface SimulationCheckpoint {
@@ -24,6 +25,8 @@ export type ServerState = GameState & {
     tick: number;
     ack: number;
     simulation: SimulationCheckpoint;
+    /** Content-addressed PNG geometry already shipped with both peers. */
+    terrainImage?: string;
   };
 };
 
@@ -44,5 +47,11 @@ export const MAX_SEQUENCE_GAP = 240;
 
 export function stateWithoutNetwork(state: ServerState): GameState {
   const { net: _net, ...game } = state;
+  if (_net?.terrainImage && !game.platforms.length) {
+    const map = getMap(game.mapId);
+    if (map.image !== _net.terrainImage || game.width % map.width || game.width < map.width)
+      throw new Error("The room uses a different map image. Reload to get the latest maps.");
+    game.platforms = mapPlatforms(map, game.width / map.width);
+  }
   return game;
 }

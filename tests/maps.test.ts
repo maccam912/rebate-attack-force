@@ -5,6 +5,7 @@ import { DEFAULT_MAP_ID, getMap, isMapId, MAPS } from "../shared/maps.js";
 import { MAX_FROGS, MAX_MINES } from "../shared/settings.js";
 import type { GameState, Point } from "../shared/types.js";
 import { WEAPON_CATALOG } from "../shared/weapons.js";
+import { imageSurface } from "../shared/image-terrain.js";
 
 function advance(game: GameEngine, seconds: number): void {
   for (let frame = 0; frame < Math.ceil(seconds / FIXED_STEP); frame++) game.step(FIXED_STEP);
@@ -13,9 +14,13 @@ function advance(game: GameEngine, seconds: number): void {
 function assertExposedTop(state: GameState, point: Point, radius: number): void {
   assert.ok(point.x >= radius && point.x <= state.width - radius && point.y >= radius);
   const support = state.platforms.find((platform) =>
-    point.y + radius === platform.y && point.x - radius >= platform.x && point.x + radius <= platform.x + platform.w);
+    point.y + radius === platform.y && (getMap(state.mapId).image
+      ? point.x + radius > platform.x && point.x - radius < platform.x + platform.w
+      : point.x - radius >= platform.x && point.x + radius <= platform.x + platform.w));
   assert.ok(support, `supported position at ${point.x}, ${point.y}`);
   assert.ok(!support.boundary, "nothing spawns above an enclosing wall");
+  if (getMap(state.mapId).image) assert.equal(imageSurface(state.platforms, point.x, point.y + radius, radius)?.steep, false,
+    "starting positions and supplies must be on stable surfaces");
   assert.ok(state.platforms.every((platform) => platform === support ||
     point.x + radius <= platform.x || point.x - radius >= platform.x + platform.w ||
     point.y + radius <= platform.y || point.y - radius >= platform.y + platform.h), "position is not inside terrain");
